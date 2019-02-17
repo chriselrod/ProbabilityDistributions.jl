@@ -1,0 +1,10 @@
+name = "ProbabilityDistributions"
+uuid = "3e413219-3d65-5be9-8809-9d8824e993e6"
+authors = ["Chris Elrod <elrodc@gmail.com>"]
+version = "0.1.0"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]
