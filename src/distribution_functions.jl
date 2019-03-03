@@ -25,7 +25,7 @@ y ~ normal(μ, inv(chol(Σ)))
 This may be handled under the hood via how we represent Σ.
 
 """
-function distribution_diff_rule!(first_pass, second_pass, tracked_vars, out, A, f)
+function distribution_diff_rule!(mod, first_pass, second_pass, tracked_vars, out, A, f)
     track_out = false
     function_output = Expr(:tuple, out)
     track_tup = Expr(:tuple,)
@@ -41,7 +41,7 @@ function distribution_diff_rule!(first_pass, second_pass, tracked_vars, out, A, 
         push!(function_output.args, ∂)
         pushfirst!(second_pass.args, :( $(Symbol("###adjoint###", a)) += $∂ * $(Symbol("###adjoint###", out)) ))
     end
-    push!(first_pass.args, :($function_output = $(Symbol(:∂, f))($(A...), Val{$track_tup}())))
+    push!(first_pass.args, :($function_output = $(mod).$(Symbol(:∂, f))($(A...), Val{$track_tup}())))
     track_out && push!(tracked_vars, out)
     nothing
 end
@@ -168,6 +168,7 @@ push!(FMADD_DISTRIBUTIONS, :Bernoulli_logit)
     if PaddedMatrices.is_sized(β)
         N_β = PaddedMatrices.type_length(β)
         q = quote
+            # $(Expr(:meta, :inline))
             # T = promote_type(eltype(α),eltype(β),eltype(X))
             target = zero($T)
             @vectorize $T for i ∈ eachindex(y)
@@ -245,6 +246,7 @@ end
             push!(partial_exprs, :(∂αP += y[i] ? ∂logP : ∂logOmP))
         end
         q = quote
+            # $(Expr(:meta, :inline))
             $init_q
             @vectorize $T for i ∈ eachindex(y)
                 a = $(Expr(:call, :+, :α, [:(X[i,$n] * β[$n]) for n ∈ 1:N_β]...))
