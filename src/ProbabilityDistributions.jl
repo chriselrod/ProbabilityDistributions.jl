@@ -1,5 +1,7 @@
 module ProbabilityDistributions
 
-greet() = print("Hello World!")
+using PaddedMatrices, SIMDPirates, SLEEF
+
+include("distribution_functions.jl")
 
 end # module
