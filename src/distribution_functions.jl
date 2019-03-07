@@ -172,7 +172,10 @@ push!(FMADD_DISTRIBUTIONS, :Bernoulli_logit)
             # T = promote_type(eltype(α),eltype(β),eltype(X))
             target = zero($T)
             @vectorize $T for i ∈ eachindex(y)
-                a = $(Expr(:call, :+, :α, [:(X[i,$n] * β[$n]) for n ∈ 1:N_β]...))
+                # a = $(Expr(:call, :+, :α, [:(X[i,$n] * β[$n]) for n ∈ 1:N_β]...))
+                # Break it up, so inference still works for N_β > 15
+                a = SIMDPirates.vmuladd(X[i,1], β[1], α)
+                $([:(a = SIMDPirates.vmuladd(X[i,$n], β[$n], a)) for n ∈ 2:N_β]...)
                 OmP = one($T) / (one($T) + SLEEF.exp( a ))
                 # P = one($T) - OmP
                 logOmP = log(OmP)
@@ -249,7 +252,9 @@ end
             # $(Expr(:meta, :inline))
             $init_q
             @vectorize $T for i ∈ eachindex(y)
-                a = $(Expr(:call, :+, :α, [:(X[i,$n] * β[$n]) for n ∈ 1:N_β]...))
+                # a = $(Expr(:call, :+, :α, [:(X[i,$n] * β[$n]) for n ∈ 1:N_β]...))
+                a = SIMDPirates.vmuladd(X[i,1], β[1], α)
+                $([:(a = SIMDPirates.vmuladd(X[i,$n], β[$n], a)) for n ∈ 2:N_β]...)
                 OmP = one($T) / (one($T) + SLEEF.exp( a ))
                 P = one($T) - OmP
                 logOmP = SLEEF.log(OmP)
