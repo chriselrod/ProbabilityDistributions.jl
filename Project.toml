@@ -7,7 +7,7 @@ version = "0.1.0"
 LoopVectorization = "bdcacae8-1622-11e9-2a5c-532679323890"
 PaddedMatrices = "1f4db776-fdbc-11e8-06f3-e1707b8b4170"
 SIMDPirates = "21efa798-c60a-11e8-04d3-e1a92915a26a"
-SLEEF = "3e6341c9-01f6-5312-b33f-f8894a2e817a"
+SLEEFPirates = "476501e8-09a2-5ece-8869-fb82de89a1fa"
 VectorizationBase = "3d5dd08c-fd9d-11e8-17fa-ed2836048c2f"
 VectorizedRNG = "33b4df10-0173-11e9-2a0c-851a7edac40e"
 

@@ -1,6 +1,6 @@
 module ProbabilityDistributions
 
-using PaddedMatrices, SIMDPirates, SLEEF, LoopVectorization
+using PaddedMatrices, SIMDPirates, SLEEFPirates, LoopVectorization
 
 include("distribution_functions.jl")
 

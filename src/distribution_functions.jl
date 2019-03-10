@@ -151,7 +151,7 @@ push!(FMADD_DISTRIBUTIONS, :Bernoulli_logit)
 #         T = promote_type(eltype(α, X, β))
 #         target = zero(T)
 #         @fastmath @inbounds @simd ivdep for i ∈ eachindex(y)
-#             OmP = one(T) / (one(T) + SLEEF.exp( α + β[i] * x[i]  ))
+#             OmP = one(T) / (one(T) + SLEEFPirates.exp( α + β[i] * x[i]  ))
 #             P = one(T) - P
 #             target += y[i] ? P : OmP
 #         end
@@ -176,7 +176,7 @@ push!(FMADD_DISTRIBUTIONS, :Bernoulli_logit)
                 # Break it up, so inference still works for N_β > 15
                 a = SIMDPirates.vmuladd(X[i,1], β[1], α)
                 $([:(a = SIMDPirates.vmuladd(X[i,$n], β[$n], a)) for n ∈ 2:N_β]...)
-                OmP = one($T) / (one($T) + SLEEF.exp( a ))
+                OmP = one($T) / (one($T) + SLEEFPirates.exp( a ))
                 # P = one($T) - OmP
                 logOmP = log(OmP)
                 logP = a + logOmP
@@ -255,9 +255,9 @@ end
                 # a = $(Expr(:call, :+, :α, [:(X[i,$n] * β[$n]) for n ∈ 1:N_β]...))
                 a = SIMDPirates.vmuladd(X[i,1], β[1], α)
                 $([:(a = SIMDPirates.vmuladd(X[i,$n], β[$n], a)) for n ∈ 2:N_β]...)
-                OmP = one($T) / (one($T) + SLEEF.exp( a ))
+                OmP = one($T) / (one($T) + SLEEFPirates.exp( a ))
                 P = one($T) - OmP
-                logOmP = SLEEF.log(OmP)
+                logOmP = SLEEFPirates.log(OmP)
                 logP = a + logOmP
                 target += y[i] ? logP : logOmP
                 $(partial_exprs...)
