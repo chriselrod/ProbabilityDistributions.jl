@@ -39,7 +39,7 @@ function distribution_diff_rule!(mod, first_pass, second_pass, tracked_vars, out
         track_out = true
         ∂ = Symbol("###adjoint###_##∂", out, "##∂", a, "##")
         push!(function_output.args, ∂)
-        pushfirst!(second_pass.args, :( $(Symbol("###seed###", a)) += $∂ * $(Symbol("###seed###", out)) ))
+        pushfirst!(second_pass.args, :( $(Symbol("###seed###", a)) += $(Symbol("###seed###", out)) * $∂ ))
     end
     push!(first_pass.args, :($function_output = $(mod).$(Symbol(:∂, f))($(A...), Val{$track_tup}())))
     track_out && push!(tracked_vars, out)
