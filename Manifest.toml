@@ -5,9 +5,9 @@ uuid = "2a0f44e3-6c83-55bd-87e4-b1978d98bd5f"
 
 [[Compat]]
 deps = ["Base64", "Dates", "DelimitedFiles", "Distributed", "InteractiveUtils", "LibGit2", "Libdl", "LinearAlgebra", "Markdown", "Mmap", "Pkg", "Printf", "REPL", "Random", "Serialization", "SharedArrays", "Sockets", "SparseArrays", "Statistics", "Test", "UUIDs", "Unicode"]
-git-tree-sha1 = "195a3ffcb8b0762684b6821de18f83a16455c6ea"
+git-tree-sha1 = "84aa74986c5b9b898b0d1acaf3258741ee64754f"
 uuid = "34da2185-b29b-5c13-b0c7-acf172513d20"
-version = "2.0.0"
+version = "2.1.0"
 
 [[CpuId]]
 deps = ["Markdown", "Test"]
@@ -27,6 +27,12 @@ uuid = "8bb1440f-4735-579b-a4ab-409b98df4dab"
 deps = ["Random", "Serialization", "Sockets"]
 uuid = "8ba89e20-285c-5b6f-9357-94700520ee1b"
 
+[[DistributionParameters]]
+deps = ["LoopVectorization", "PaddedMatrices", "SIMDPirates", "SLEEFPirates", "StructuredMatrices", "VectorizationBase", "VectorizedRNG"]
+path = "/home/chriselrod/.julia/dev/DistributionParameters"
+uuid = "c01b26ed-ce4c-5898-8a3a-ab63e1ee7b47"
+version = "0.1.0"
+
 [[InteractiveUtils]]
 deps = ["Markdown"]
 uuid = "b77e0a4c-d291-57a0-90e8-8db25a27a240"
@@ -45,7 +51,7 @@ uuid = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 uuid = "56ddb016-857b-54e1-b83d-db4d58db5568"
 
 [[LoopVectorization]]
-deps = ["MacroTools", "SIMDPirates", "SLEEF", "VectorizationBase"]
+deps = ["MacroTools", "SIMDPirates", "SLEEFPirates", "VectorizationBase"]
 path = "/home/chriselrod/.julia/dev/LoopVectorization"
 uuid = "bdcacae8-1622-11e9-2a5c-532679323890"
 version = "0.1.0"
@@ -94,16 +100,16 @@ path = "/home/chriselrod/.julia/dev/SIMDPirates"
 uuid = "21efa798-c60a-11e8-04d3-e1a92915a26a"
 version = "0.1.0"
 
-[[SLEEF]]
-deps = ["Printf", "Test"]
-git-tree-sha1 = "9d8bdbfad44aaab6886a7c4a3c84b6c49d752d47"
-uuid = "3e6341c9-01f6-5312-b33f-f8894a2e817a"
-version = "0.5.1"
-
 [[SLEEFPirates]]
 deps = ["SIMDPirates", "VectorizationBase"]
 path = "/home/chriselrod/.julia/dev/SLEEFPirates"
 uuid = "476501e8-09a2-5ece-8869-fb82de89a1fa"
+version = "0.1.0"
+
+[[ScatteredArrays]]
+deps = ["LoopVectorization", "PaddedMatrices", "SIMDPirates", "SLEEFPirates", "StaticArrays", "VectorizationBase", "VectorizedRNG"]
+path = "/home/chriselrod/.julia/dev/ScatteredArrays"
+uuid = "7824b66e-fd9c-11e8-16df-0940c56ad1d9"
 version = "0.1.0"
 
 [[Serialization]]
@@ -120,9 +126,21 @@ uuid = "6462fe0b-24de-5631-8697-dd941f90decc"
 deps = ["LinearAlgebra", "Random"]
 uuid = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 
+[[StaticArrays]]
+deps = ["InteractiveUtils", "LinearAlgebra", "Random", "Statistics", "Test"]
+git-tree-sha1 = "3841b39ed5f047db1162627bf5f80a9cd3e39ae2"
+uuid = "90137ffa-7385-5640-81b9-e52037218182"
+version = "0.10.3"
+
 [[Statistics]]
 deps = ["LinearAlgebra", "SparseArrays"]
 uuid = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
+
+[[StructuredMatrices]]
+deps = ["LinearAlgebra", "LoopVectorization", "PaddedMatrices", "SIMDPirates", "SLEEFPirates", "VectorizationBase", "VectorizedRNG"]
+path = "/home/chriselrod/.julia/dev/StructuredMatrices"
+uuid = "831e5bd0-d036-11e8-2dea-c77e7dab29a6"
+version = "0.1.0"
 
 [[Test]]
 deps = ["Distributed", "InteractiveUtils", "Logging", "Random"]
