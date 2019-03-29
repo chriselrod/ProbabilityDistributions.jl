@@ -12,6 +12,7 @@
 
 const DISTRIBUTION_DIFF_RULES = Set{Symbol}()
 
+
 """
 Do we inline the expression, or try and take advantage of multiple dispatch?
 The latter option sounds more appealing flexible, and easier to test.
@@ -39,7 +40,8 @@ function distribution_diff_rule!(mod, first_pass, second_pass, tracked_vars, out
         track_out = true
         ∂ = Symbol("###adjoint###_##∂", out, "##∂", a, "##")
         push!(function_output.args, ∂)
-        pushfirst!(second_pass.args, :( $(Symbol("###seed###", a)) += $(Symbol("###seed###", out)) * $∂ ))
+        pushfirst!(second_pass.args, :( $(Symbol("###seed###", a)) = ProbabilityModels.PaddedMatrices.RESERVED_INCREMENT_SEED_RESERVED($(Symbol("###seed###", out)), $∂, $(Symbol("###seed###", a)))))
+        # pushfirst!(second_pass.args, :( $(Symbol("###seed###", a)) = $(Symbol("###seed###", out)) * $∂ ))
     end
     push!(first_pass.args, :($function_output = $(mod).$(Symbol(:∂, f))($(A...), Val{$track_tup}())))
     track_out && push!(tracked_vars, out)
@@ -205,3 +207,441 @@ end
 function ∂Bernoulli_logit_fnmsub_logeval_dropconst_quote()
 
 end
+
+
+@generated function LKJ_logeval_dropconst(L::LKJ_Correlation_Cholesky{N,T}, η::T, ::Val{track}) where {N,T,track}
+    quote
+        out = zero($T)
+        @vectorize $T for n ∈ 1:$(N-1)
+            out += ($(N - 3) - n + 2η) * log(L[n+1])
+        end
+        out
+    end
+end
+@generated function ∂LKJ_logeval_dropconst(L::LKJ_Correlation_Cholesky{N,T}, η::T, ::Val{track}) where {N,T,track}
+    track_L, track_η = track
+    if track_L && track_η
+        quote
+            out = zero($T)
+            ∂L = MutableFixedSizePaddedVector{$N,$T}(undef)
+            @inbounds ∂L[1] = 0
+            ∂η = zero($T)
+            @vectorize $T for n ∈ 1:$(N-1)
+                ∂ηₙ = log(L[n+1])
+                coef = ($(N - 3) - n + 2η)
+                out += coef * ∂ηₙ
+                ∂L[n+1] = coef / L[n+1]
+                ∂η += 2∂ηₙ
+            end
+            out, Diagonal(ConstantFixedSizePaddedVector(∂L)), ∂η
+        end
+    elseif track_L
+        quote
+            out = zero($T)
+            ∂L = MutableFixedSizePaddedVector{$N,$T}(undef)
+            @inbounds ∂L[1] = 0
+            ∂η = zero($T)
+            @vectorize $T for n ∈ 1:$(N-1)
+                ∂ηₙ = log(L[n+1])
+                coef = ($(N - 3) - n + 2η)
+                out += coef * ∂ηₙ
+                ∂L[n+1] = coef / L[n+1]
+            end
+            out, Diagonal(ConstantFixedSizePaddedVector(∂L))
+        end
+    elseif track_η
+        quote
+            out = zero($T)
+            ∂η = zero($T)
+            @vectorize $T for n ∈ 1:$(N-1)
+                ∂ηₙ = log(L[n+1])
+                coef = ($(N - 3) - n + 2η)
+                out += coef * ∂ηₙ
+                ∂η += 2∂ηₙ
+            end
+            out, ∂η
+        end
+    else
+        quote
+            out = zero($T)
+            @vectorize $T for n ∈ 1:$(N-1)
+                ∂ηₙ = log(L[n+1])
+                coef = ($(N - 3) - n + 2η)
+                out += coef * ∂ηₙ
+            end
+            out
+        end
+    end
+end
+push!(DISTRIBUTION_DIFF_RULES, :LKJ_logeval_dropconst)
+
+
+function gamma_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_β), partial)
+    q = quote end
+    pre_quote = quote end
+    return_expr = Expr(:tuple, :out)
+    loop = any((yisvec, αisvec, βisvec))
+    # set initialized to loop; if we are looping, we'll start out at zero
+    initialized = loop
+    if yisvec
+        yexpr = :(y[i])
+        logyexpr = :(SLEEFPirates.log(y[i]))
+    else
+        yexpr = :y
+        push!(pre_quote.args, :(logy = Base.log(y)))
+        logyexpr = :logy
+    end
+    if αisvec
+        αexpr = :(α[i])
+        lgammaαexpr = :(SpecialFunctions.lgamma(α[i]))
+        αm1expr = :(α[i] - one(eltype(α)))
+    else
+        αexpr = :α
+        lgammaαexpr = :(lgammaα)
+        αm1expr = :(αm1)
+        push!(pre_quote.args, :(lgammaα = SpecialFunctions.lgamma(α)))
+        push!(pre_quote.args, :(αm1 = α[i] - one(eltype(α))))
+    end
+    if βisvec
+        βexpr = :(β[i])
+        logβexpr = :(SLEEFPirates.log(β[i]))
+    else
+        βexpr = :β
+        logβexpr = :logβ
+        push!(pre_quote.args, :(logβ = Base.log(β)))
+    end
+
+    if partial
+        if track_y
+            if yisvec
+                ∂yassignment = :(=)
+                ∂ystorage = :(∂y[i])
+                push!(pre_quote.args, :(∂y = PaddedMatrices.MutableFixedSizePaddedVector{$M,$T}(undef)))
+                push!(return_expr.args, :(PaddedMatrices.ConstantFixedSizePaddedVector(∂y)))
+            else
+                ∂yassignment = :(+=)
+                ∂ystorage = :∂y
+                push!(return_expr.args, :(∂y))
+            end
+        end
+        if track_α
+            if αisvec
+                ∂αassignment = :(=)
+                ∂αstorage = :(∂α[i])
+                push!(pre_quote.args, :(∂α = PaddedMatrices.MutableFixedSizePaddedVector{$M,$T}(undef)))
+                push!(return_expr.args, :(PaddedMatrices.ConstantFixedSizePaddedVector(∂α)))
+            else
+                ∂αassignment = :(+=)
+                ∂αstorage = :(∂α)
+                push!(return_expr.args, :(∂α))
+            end
+        end
+        if track_β
+            if βisvec
+                ∂βassignment = :(=)
+                ∂βstorage = :(∂β[i])
+                push!(pre_quote.args, :(∂β = PaddedMatrices.MutableFixedSizePaddedVector{$M,$T}(undef)))
+                push!(return_expr.args, :(PaddedMatrices.ConstantFixedSizePaddedVector(∂β)))
+            else
+                ∂βassignment = :(+=)
+                ∂βstorage = :(∂β)
+                push!(return_expr.args, :(∂β))
+            end
+        end
+    end
+    if track_α || track_β
+        push!(q.args, :( lβ = $logβexpr))
+        if initialized
+            push!(q.args, :( out += $αexpr * lβ ) )
+        else
+            push!(q.args, :( out = $αexpr * lβ) )
+            initialized = true
+        end
+        if partial
+            track_α && push!(q.args, Expr(∂αassignment, ∂αstorage, :lβ) )
+            track_β && push!(q.args, Expr(∂βassignment, ∂βstorage, αexpr) )
+        end
+    end
+    if track_α || track_y
+        push!(q.args, :(ly = $logyexpr))
+        if initialized
+            push!(q.args, :( out += $αm1expr * ly ) )
+        else
+            push!(q.args, :( out = $αm1expr * ly ) )
+            initialized = true
+        end
+        if partial
+            track_α && push!(q.args, Expr(:(+=), ∂αstorage, :ly) )
+            track_y && push!(q.args, Expr(∂yassignment, ∂ystorage, :($αm1expr / $yexpr) ) )
+        end
+    end
+    if track_β || track_y
+        # initialized == true
+        push!(q.args, :(out -= $βexpr*$yexpr))
+        if partial
+            track_β && push!(q.args, Expr(:(-=), ∂βstorage, yexpr ) )
+            track_y && push!(q.args, Expr(:(-=), ∂ystorage, βexpr ) )
+        end
+    end
+    if track_α
+        # initialized == true, because (if track_α || track_β) == true
+        push!(q.args, :(out -= $lgammaαexpr))
+
+        if partial
+            if αisvec
+                push!(q.args, Expr(:(-=), ∂αstorage, :( SpecialFunctions.digamma($αexpr) ) ) )
+            else
+                push!(pre_quote.args, Expr(:(-=), ∂αstorage, :($M * SpecialFunctions.digamma(α)) ) )
+            end
+        end
+    end
+    if loop
+        quote
+            $(Expr(:meta,:inline))
+            @fastmath begin
+                $pre_quote
+            end
+            @vectorize $T for i ∈ 1:$M
+                $q
+            end
+            @fastmath begin
+                $(return_expression(return_expr))
+            end
+        end
+    else
+        quote
+            $(Expr(:meta,:inline))
+            @fastmath begin
+                $pre_quote
+                $q
+                $(return_expression(return_expr))
+            end
+        end
+    end
+end
+
+# α * log(β) + (α-1) * log(y) - β*y - lgamma(α)
+function Gamma_logeval_dropconst(
+            y::PaddedMatrices.AbstractFixedSizePaddedVector{M,T},
+            α::Union{T,<:PaddedMatrices.AbstractFixedSizePaddedVector{M,T}},
+            β::Union{T,<:PaddedMatrices.AbstractFixedSizePaddedVector{M,T}},
+            ::Val{track}) where {track,T,M}
+    αisvec = α <: PaddedMatrices.AbstractFixedSizePaddedVector
+    βisvec = β <: PaddedMatrices.AbstractFixedSizePaddedVector
+    gamma_quote(M, T, true, αisvec, βisvec, track, false)
+end
+function ∂Gamma_logeval_dropconst(
+            y::PaddedMatrices.AbstractFixedSizePaddedVector{M,T},
+            α::Union{T,<:PaddedMatrices.AbstractFixedSizePaddedVector{M,T}},
+            β::Union{T,<:PaddedMatrices.AbstractFixedSizePaddedVector{M,T}},
+            ::Val{track}) where {track,T,M}
+    αisvec = α <: PaddedMatrices.AbstractFixedSizePaddedVector
+    βisvec = β <: PaddedMatrices.AbstractFixedSizePaddedVector
+    gamma_quote(M, T, true, αisvec, βisvec, track, true)
+end
+function Gamma_logeval_dropconst(y::T, α::T, β::T, ::Val{track}) where {track,T <: Real}
+    gamma_quote(1, T, false, false, false, track, false)
+end
+function ∂Gamma_logeval_dropconst(y::T, α::T, β::T, ::Val{track}) where {track,T <: Real}
+    gamma_quote(1, T, false, false, false, track, true)
+end
+
+push!(DISTRIBUTION_DIFF_RULES, :Gamma_logeval_dropconst)
+
+
+
+
+
+
+
+function beta_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_β), partial)
+    q = quote end
+    pre_quote = quote end
+    return_expr = Expr(:tuple, :out)
+    loop = any((yisvec, αisvec, βisvec))
+    # set initialized to loop; if we are looping, we'll start out at zero
+    initialized = loop
+    if yisvec
+        yexpr = :(y[i])
+        logyexpr = :(SLEEFPirates.log(y[i]))
+        logomyexpr = :(SLEEFPirates.log(one(eltype(y)) - y[i]))
+    else
+        yexpr = :y
+        logyexpr = :logy
+        logomyexpr = :logomy
+        push!(pre_quote.args, :(logy = Base.log(y)))
+        push!(pre_quote.args, :(logomy = Base.log(one(y) - y)))
+    end
+    if αisvec
+        αexpr = :(α[i])
+        # lgammaαexpr = :(lgamma(α[i]))
+        αm1expr = :(α[i] - one(eltype(α)))
+    else
+        αexpr = :α
+        # digammaαexpr = :(lgammaα)
+        αm1expr = :(αm1)
+        # push!(pre_quote.args, :(lgammaα = lgamma(α)))
+        push!(pre_quote.args, :(αm1 = α[i] - one(α)))
+    end
+    if βisvec
+        βexpr = :(β[i])
+        # lgammaαexpr = :(lgamma(α[i]))
+        βm1expr = :(β[i] - one(eltype(β)))
+    else
+        βexpr = :β
+        # digammaαexpr = :(lgammaα)
+        βm1expr = :(βm1)
+        # push!(pre_quote.args, :(lgammaα = lgamma(α)))
+        push!(pre_quote.args, :(βm1 = β[i] - one(β)))
+    end
+    if αisvec || βisvec
+        lbetaβexpr = :(SpecialFunctions.lbeta($αexpr, $βexpr))
+    else # neither are vectors
+        lbetaβexpr = :lbetaαβ
+        push!(pre_quote, :(lbetaαβ = SpecialFunctions.lbeta(α, β)))
+    end
+
+    if partial
+        if track_y
+            if yisvec
+                ∂yassignment = :(=)
+                ∂ystorage = :(∂y[i])
+                push!(pre_quote.args, :(∂y = PaddedMatrices.MutableFixedSizePaddedVector{$M,$T}(undef)))
+                push!(return_expr.args, :(PaddedMatrices.ConstantFixedSizePaddedVector(∂y)))
+            else
+                ∂yassignment = :(+=)
+                ∂ystorage = :∂y
+                push!(return_expr.args, :(∂y))
+            end
+        end
+        if track_α
+            if αisvec
+                ∂αassignment = :(=)
+                ∂αstorage = :(∂α[i])
+                dgαexpr = :(SpecialFunctions.digamma(α[i]))
+                push!(pre_quote.args, :(∂α = PaddedMatrices.MutableFixedSizePaddedVector{$M,$T}(undef)))
+                push!(return_expr.args, :(PaddedMatrices.ConstantFixedSizePaddedVector(∂α)))
+            else
+                ∂αassignment = :(+=)
+                ∂αstorage = :(∂α)
+                dgαexpr = :dgα
+                push!(pre_quote.args, :(dgα = SpecialFunctions.digamma(α)))
+                push!(return_expr.args, :(∂α))
+            end
+        end
+        if track_β
+            if βisvec
+                ∂βassignment = :(=)
+                ∂βstorage = :(∂β[i])
+                dgβexpr = :(SpecialFunctions.digamma(β[i]))
+                push!(pre_quote.args, :(∂β = PaddedMatrices.MutableFixedSizePaddedVector{$M,$T}(undef)))
+                push!(return_expr.args, :(PaddedMatrices.ConstantFixedSizePaddedVector(∂β)))
+            else
+                ∂βassignment = :(+=)
+                ∂βstorage = :(∂β)
+                dgβexpr = :dgβ
+                push!(pre_quote.args, :(dgβ = SpecialFunctions.digamma(β)))
+                push!(return_expr.args, :(∂β))
+            end
+        end
+        if track_α || track_β
+            if αisvec || βisvec
+                push!(q.args, :(dgαβ = SpecialFunctions.digamma($αexpr + $βexpr) ))
+            else # both are scalars
+                push!(pre_quote.args, :(dgαβ = SpecialFunctions.digamma(α + β) ))
+            end
+        end
+    end
+
+    if track_α || track_y
+        push!(q.args, :( am1 = $αm1expr))
+        push!(q.args, :( logy = $logyexpr))
+        if initialized
+            push!(q.args, :( out += am1 * logy ) )
+        else
+            push!(q.args, :( out = am1 * logy ) )
+            initialized = true
+        end
+        if partial
+            track_α && push!(q.args, Expr(∂αassignment, ∂αstorage, :logy) )
+            track_y && push!(q.args, Expr(∂yassignment, ∂ystorage, :($αm1 / $yexpr) ) )
+        end
+    end
+    if track_β || track_y
+        push!(q.args, :( bm1 = $βm1expr))
+        push!(q.args, :( logomy = $logomyexpr))
+        if initialized
+            push!(q.args, :( out += bm1 * logomy ) )
+        else
+            push!(q.args, :( out = bm1 * logomy ) )
+            initialized = true
+        end
+        if partial
+            track_β && push!(q.args, Expr(∂βassignment, ∂βstorage, :logomy) )
+            track_y && push!(q.args, Expr(:(-=), ∂ystorage, :( $bm1 / $(one(eltype(y)) - yexpr) ) ))
+        end
+    end
+    if track_α || track_β
+        push!(q.args, :(ly = $logyexpr))
+        if initialized
+            push!(q.args, :( out -= $lbetaβexpr ) )
+        else
+            push!(q.args, :( out = -$lbetaβexpr ) )
+            initialized = true
+        end
+        if partial
+            track_α && push!(q.args, Expr(:(+=), ∂αstorage, :(dgαβ - $dgαexpr) ) )
+            track_β && push!(q.args, Expr(:(+=), ∂βstorage, :(dgαβ - $dgβexpr) ) )
+        end
+    end
+    if loop
+        quote
+            $(Expr(:meta,:inline))
+            @fastmath begin
+                $pre_quote
+            end
+            @vectorize $T for i ∈ 1:$M
+                $q
+            end
+            @fastmath begin
+                $(return_expression(return_expr))
+            end
+        end
+    else
+        quote
+            $(Expr(:meta,:inline))
+            @fastmath begin
+                $pre_quote
+                $q
+                $(return_expression(return_expr))
+            end
+        end
+    end
+end
+
+# α * log(β) + (α-1) * log(y) - β*y - lgamma(α)
+function Beta_logeval_dropconst(
+            y::PaddedMatrices.AbstractFixedSizePaddedVector{M,T},
+            α::Union{T,<:PaddedMatrices.AbstractFixedSizePaddedVector{M,T}},
+            β::Union{T,<:PaddedMatrices.AbstractFixedSizePaddedVector{M,T}},
+            ::Val{track}) where {track,T,M}
+    αisvec = α <: PaddedMatrices.AbstractFixedSizePaddedVector
+    βisvec = β <: PaddedMatrices.AbstractFixedSizePaddedVector
+    beta_quote(M, T, true, αisvec, βisvec, track, false)
+end
+function ∂Beta_logeval_dropconst(
+            y::PaddedMatrices.AbstractFixedSizePaddedVector{M,T},
+            α::Union{T,<:PaddedMatrices.AbstractFixedSizePaddedVector{M,T}},
+            β::Union{T,<:PaddedMatrices.AbstractFixedSizePaddedVector{M,T}},
+            ::Val{track}) where {track,T,M}
+    αisvec = α <: PaddedMatrices.AbstractFixedSizePaddedVector
+    βisvec = β <: PaddedMatrices.AbstractFixedSizePaddedVector
+    beta_quote(M, T, true, αisvec, βisvec, track, true)
+end
+function Beta_logeval_dropconst(y::T, α::T, β::T, ::Val{track}) where {track,T <: Real}
+    beta_quote(M, T, false, false, false, track, false)
+end
+function ∂Beta_logeval_dropconst(y::T, α::T, β::T, ::Val{track}) where {track,T <: Real}
+    beta_quote(M, T, false, false, false, track, true)
+end
+push!(DISTRIBUTION_DIFF_RULES, :Beta_logeval_dropconst)

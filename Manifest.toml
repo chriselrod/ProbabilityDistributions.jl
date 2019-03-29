@@ -28,7 +28,7 @@ deps = ["Random", "Serialization", "Sockets"]
 uuid = "8ba89e20-285c-5b6f-9357-94700520ee1b"
 
 [[DistributionParameters]]
-deps = ["LoopVectorization", "PaddedMatrices", "SIMDPirates", "SLEEFPirates", "StructuredMatrices", "VectorizationBase", "VectorizedRNG"]
+deps = ["LinearAlgebra", "LoopVectorization", "PaddedMatrices", "SIMDPirates", "SLEEFPirates", "StructuredMatrices", "VectorizationBase", "VectorizedRNG"]
 path = "/home/chriselrod/.julia/dev/DistributionParameters"
 uuid = "c01b26ed-ce4c-5898-8a3a-ab63e1ee7b47"
 version = "0.1.0"
