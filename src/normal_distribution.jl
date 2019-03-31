@@ -1,6 +1,6 @@
 
 
-push!(DISTRIBUTION_DIFF_RULES, :Normal_logeval_dropconst)
+push!(DISTRIBUTION_DIFF_RULES, :Normal)
 
 function univariate_normal_quote(
                 M::Int, T::DataType, yisvec::Bool,
@@ -258,41 +258,40 @@ function multivariate_normal_lkj_quote(M, L, T, (track_y, track_μ, track_Σ), p
         end
     end
 end
-# @generated function Normal_logeval_dropconst(y::AbstractFixedSizePaddedVector{M,T}, ::Val{track}) where {M,track,T}
-# @generated
-function Normal_logeval_dropconst(y::AbstractFixedSizePaddedVector{M,T}, ::Val{track}) where {M,T,track}
+# @generated function Normal(y::AbstractFixedSizePaddedVector{M,T}, ::Val{track}) where {M,track,T}
+@generated function Normal(y::AbstractFixedSizePaddedVector{M,T}, ::Val{track}) where {M,T,track}
     univariate_normal_quote( M, T, true, nothing, nothing, (track[1], false, false), false, true)
 end
-@generated function Normal_logeval_dropconst(y::T, ::Val{track}) where {track,T <: Real}
+@generated function Normal(y::T, ::Val{track}) where {track,T <: Real}
     univariate_normal_quote(1, T, false, nothing, nothing, (track[1], false, false), false, true)
 end
-@generated function Normal_logeval_dropconst(y::AbstractFixedSizePaddedVector{M,T}, σ::Union{T,Int}, ::Val{track}) where {M, T <: Real, track}
+@generated function Normal(y::AbstractFixedSizePaddedVector{M,T}, σ::Union{T,Int}, ::Val{track}) where {M, T <: Real, track}
     univariate_normal_quote(
                     M, T, true, nothing, false,
                     (track[1], false, track[2]), false, true)
 end
-@generated function Normal_logeval_dropconst(y::T, σ::Union{T,Int}, ::Val{track}) where {T <: Real, track}
+@generated function Normal(y::T, σ::Union{T,Int}, ::Val{track}) where {T <: Real, track}
     univariate_normal_quote(
                     1, T, false, nothing, false,
                     (track[1], false, track[2]), false, true)
 end
-@generated function Normal_logeval_dropconst(
+@generated function Normal(
                 y::AbstractFixedSizePaddedVector{M,T},
                 σ²::Union{LinearAlgebra.UniformScaling{T},LinearAlgebra.UniformScaling{Int}}, ::Val{track})::T where {M, T <: Real, track}
     univariate_normal_quote(
                     M, T, true, nothing, false,
                     (track[1], false, track[2]), false, false)
 end
-@generated function Normal_logeval_dropconst(y::T, σ²::LinearAlgebra.UniformScaling{T}, ::Val{track}) where {T <: Real, track}
+@generated function Normal(y::T, σ²::LinearAlgebra.UniformScaling{T}, ::Val{track}) where {T <: Real, track}
     univariate_normal_quote(
                     1, T, false, nothing, false,
                     (track[1], false, track[2]), false, false)
 end
 
-@generated function Normal_logeval_dropconst(y::T, μ::T, σ::T, ::Val{track}) where {T <: Real, track}
+@generated function Normal(y::T, μ::T, σ::T, ::Val{track}) where {T <: Real, track}
     univariate_normal_quote( 1, T, false, false, false, track, false, true)
 end
-@generated function Normal_logeval_dropconst(
+@generated function Normal(
                     y::AbstractFixedSizePaddedVector{M,T},
                     μ::Union{T,Int,<:AbstractFixedSizePaddedVector{M,T}},
                     σ::Union{T,Int,<:AbstractFixedSizePaddedVector{M,T}},
@@ -300,7 +299,7 @@ end
     univariate_normal_quote( M, T, true,
         μ <: AbstractFixedSizePaddedVector, σ <: AbstractFixedSizePaddedVector, track, false, true)
 end
-@generated function Normal_logeval_dropconst(
+@generated function Normal(
                     y::T,
                     μ::AbstractFixedSizePaddedVector{M,T},
                     σ::Union{T,Int,<:AbstractFixedSizePaddedVector{M,T}},
@@ -308,7 +307,7 @@ end
     univariate_normal_quote( M, T, false,
         true, σ <: AbstractFixedSizePaddedVector, track, false, true)
 end
-@generated function Normal_logeval_dropconst(
+@generated function Normal(
                     y::T,
                     μ::Union{T,Int},
                     σ::AbstractFixedSizePaddedVector{M,T},
@@ -316,12 +315,12 @@ end
     univariate_normal_quote( M, T, false, false, true, track, false, true)
 end
 
-@generated function Normal_logeval_dropconst(y::AbstractFixedSizePaddedVector{M,T},
+@generated function Normal(y::AbstractFixedSizePaddedVector{M,T},
                                     μ, L::StructuredMatrices.AbstractLowerTriangularMatrix{M,T,LL},
                                     ::Val{track}) where {M, T <: Real, LL, track}
     multivariate_normal_lkj_quote(M, LL, T, track, false, false)
 end
-@generated function Normal_logeval_dropconst(y::AbstractFixedSizePaddedVector{M,T},
+@generated function Normal(y::AbstractFixedSizePaddedVector{M,T},
                                     μ, R::StructuredMatrices.AbstractUpperTriangularMatrix{M,T,LL},
                                     ::Val{track}) where {M, T <: Real, LL, track}
 
@@ -330,39 +329,39 @@ end
 
 
 
-@generated function ∂Normal_logeval_dropconst(y::AbstractFixedSizePaddedVector{M,T}, ::Val{track}) where {track,M,T}
+@generated function ∂Normal(y::AbstractFixedSizePaddedVector{M,T}, ::Val{track}) where {track,M,T}
     univariate_normal_quote( M, T, true, nothing, nothing, (track[1], false, false), true, true)
 end
-@generated function ∂Normal_logeval_dropconst(y::T, ::Val{track}) where {track,T <: Real}
+@generated function ∂Normal(y::T, ::Val{track}) where {track,T <: Real}
     univariate_normal_quote(1, T, false, nothing, nothing, (track[1], false, false), true, true)
 end
-@generated function ∂Normal_logeval_dropconst(y::AbstractFixedSizePaddedVector{M,T}, σ::T, ::Val{track}) where {M, T <: Real, track}
+@generated function ∂Normal(y::AbstractFixedSizePaddedVector{M,T}, σ::T, ::Val{track}) where {M, T <: Real, track}
     univariate_normal_quote(
                     M, T, true, nothing, false,
                     (track[1], false, track[2]), true, true)
 end
-@generated function ∂Normal_logeval_dropconst(y::T, σ::T, ::Val{track}) where {T <: Real, track}
+@generated function ∂Normal(y::T, σ::T, ::Val{track}) where {T <: Real, track}
     univariate_normal_quote(
                     1, T, false, nothing, false,
                     (track[1], false, track[2]), true, true)
 end
-@generated function ∂Normal_logeval_dropconst(
+@generated function ∂Normal(
                 y::AbstractFixedSizePaddedVector{M,T},
                 σ²::LinearAlgebra.UniformScaling{T}, ::Val{track}) where {M, T <: Real, track}
     univariate_normal_quote(
                     M, T, true, nothing, false,
                     (track[1], false, track[2]), true, false)
 end
-@generated function ∂Normal_logeval_dropconst(y::T, σ²::LinearAlgebra.UniformScaling{T}, ::Val{track}) where {T <: Real, track}
+@generated function ∂Normal(y::T, σ²::LinearAlgebra.UniformScaling{T}, ::Val{track}) where {T <: Real, track}
     univariate_normal_quote(
                     1, T, false, nothing, false,
                     (track[1], false, track[2]), true, false)
 end
 
-@generated function ∂Normal_logeval_dropconst(y::T, μ::T, σ::T, ::Val{track}) where {T <: Real, track}
+@generated function ∂Normal(y::T, μ::T, σ::T, ::Val{track}) where {T <: Real, track}
     univariate_normal_quote( 1, T, false, false, false, track, true, true)
 end
-@generated function ∂Normal_logeval_dropconst(
+@generated function ∂Normal(
                     y::AbstractFixedSizePaddedVector{M,T},
                     μ::Union{T,<:AbstractFixedSizePaddedVector{M,T}},
                     σ::Union{T,<:AbstractFixedSizePaddedVector{M,T}},
@@ -370,7 +369,7 @@ end
     univariate_normal_quote( M, T, true,
         μ <: AbstractFixedSizePaddedVector, σ <: AbstractFixedSizePaddedVector, track, true, true)
 end
-@generated function ∂Normal_logeval_dropconst(
+@generated function ∂Normal(
                     y::T,
                     μ::AbstractFixedSizePaddedVector{M,T},
                     σ::Union{T,<:AbstractFixedSizePaddedVector{M,T}},
@@ -378,7 +377,7 @@ end
     univariate_normal_quote( M, T, false,
         true, σ <: AbstractFixedSizePaddedVector, track, true, true)
 end
-@generated function ∂Normal_logeval_dropconst(
+@generated function ∂Normal(
                     y::T,
                     μ::T,
                     σ::AbstractFixedSizePaddedVector{M,T},
@@ -386,12 +385,12 @@ end
     univariate_normal_quote( M, T, false, false, true, track, true, true)
 end
 
-@generated function ∂Normal_logeval_dropconst(y::AbstractFixedSizePaddedVector{M,T},
+@generated function ∂Normal(y::AbstractFixedSizePaddedVector{M,T},
                                     μ, L::StructuredMatrices.AbstractLowerTriangularMatrix{M,T,LL},
                                     ::Val{track}) where {M, T <: Real, LL, track}
     multivariate_normal_lkj_quote(M, LL, T, track, true, false)
 end
-@generated function ∂Normal_logeval_dropconst(y::AbstractFixedSizePaddedVector{M,T},
+@generated function ∂Normal(y::AbstractFixedSizePaddedVector{M,T},
                                     μ, R::StructuredMatrices.AbstractUpperTriangularMatrix{M,T,LL},
                                     ::Val{track}) where {M, T <: Real, LL, track}
 
@@ -404,13 +403,13 @@ function matrix_normal_ar_lkj_quote(M, N, T, (track_y, track_μ, track_Λ, track
     @assert track_y == false
     initialize_block = quote
         Λᵥ = StructuredMatrices.cache(Λ)
-        Ny = length(y)
+        Ny = length(Y)
         qf = vbroadcast(Vec{$W,$T}, zero($T))
         Yᵥ = vectorizable(Y)
         i = 1
     end
     loop_block = quote
-        StructuredMatrices.diff!(δ, μ, Yᵥ[i])
+        PaddedMatrices.diff!(δ, μ, Yᵥ[i])
         mul!(δU, δ, U)
     end
     closing_block = quote end
@@ -489,7 +488,7 @@ function matrix_normal_ar_lkj_quote(M, N, T, (track_y, track_μ, track_Λ, track
     end
     quote
         $initialize_block
-        for ifrac ∈ 1:size(Y.data, 3)
+        @vectorize $T for ifrac ∈ 1:size(Y.data, 3)
             $loop_block
         end
         $closing_block
@@ -497,7 +496,7 @@ function matrix_normal_ar_lkj_quote(M, N, T, (track_y, track_μ, track_Λ, track
     end
 end
 
-@generated function Normal_logeval_dropconst(
+@generated function Normal(
             Y::AbstractScatteredArray{T,2,<: Union{SMatrix{M,N,T},AbstractFixedSizePaddedMatrix{M,N,T}},1,2},
             μ::Union{<:SMatrix{M,N,T},<:AbstractFixedSizePaddedMatrix{M,N,T}},
             Λ::AbstractAutoregressiveMatrix{T,V},
@@ -505,7 +504,7 @@ end
         ) where {M,N,T,V,track}
     matrix_normal_ar_lkj_quote(M,N,T,track,false)
 end
-@generated function ∂Normal_logeval_dropconst(
+@generated function ∂Normal(
             Y::AbstractScatteredArray{T,2,<: Union{SMatrix{M,N,T},AbstractFixedSizePaddedMatrix{M,N,T}},1,2},
             μ::Union{<:SMatrix{M,N,T},<:AbstractFixedSizePaddedMatrix{M,N,T}},
             Λ::AbstractAutoregressiveMatrix{T,V},
@@ -518,13 +517,14 @@ function matrix_normal_ar_lkjinv_quote(M, N, T, (track_y, track_μ, track_Λ, tr
     @assert track_y == false
     initialize_block = quote
         Λᵥ = StructuredMatrices.cache(Λ)
-        Ny = length(y)
+        Ny = length(Y)
         qf = vbroadcast(Vec{$W,$T}, zero($T))
         Yᵥ = vectorizable(Y)
+        δ = MutableFixedSizePaddedMatrix{$M,$N,$T}(undef)
         i = 1
     end
     loop_block = quote
-        StructuredMatrices.diff!(δ, μ, Yᵥ[i])
+        PaddedMatrices.diff!(δ, μ, Yᵥ[i])
         mul!(δU, δ, U)
     end
     closing_block = quote end
@@ -571,10 +571,10 @@ function matrix_normal_ar_lkjinv_quote(M, N, T, (track_y, track_μ, track_Λ, tr
         else
             push!(loop_block.args, :(qf = SIMDPirates.vmuladd($(T(-0.5)), StructuredMatrices.quadform(Λᵥ, δU), qf)))
         end
-        track_L && push!(loop_block.args, :(StructuredMatrices.submul!(∂qf∂U, δ', Λᵥ′ΛᵥδU)))
+        track_U && push!(loop_block.args, :(StructuredMatrices.submul!(∂qf∂U, δ', Λᵥ′ΛᵥδU)))
         track_μ && push!(loop_block.args, :(StructuredMatrices.submul!(∂qf∂δ, Λᵥ′ΛᵥδU, U')))
     else # We are not taking partials
-        track_L && push!(closing_block.args, :(logdetU = logdet(U)))
+        track_U && push!(closing_block.args, :(logdetU = logdet(U)))
         track_Λ && push!(closing_block.args, :(logdetΛ = logdet(Λ)))
 
         push!(loop_block.args, :(qf = SIMDPirates.vmuladd($(T(-0.5)), StructuredMatrices.quadform(Λᵥ, δU), qf)))
@@ -582,9 +582,9 @@ function matrix_normal_ar_lkjinv_quote(M, N, T, (track_y, track_μ, track_Λ, tr
     push!(loop_block.args, :(i += $W))
     # Here we handle the log determinants
     if track_U
-        if track_Λ # track_L and track_Λ
+        if track_Λ # track_U and track_Λ
             push!(closing_block.args, :(@fastmath qfscalar = Ny * ( $M * logdetU - $N * logdetΛ) - 0.5 * SIMDPirates.vsum(qf) ))
-        else # track_L but not Λ
+        else # track_U but not Λ
             push!(closing_block.args, :(@fastmath qfscalar = Ny * $M * logdetU - 0.5 * SIMDPirates.vsum(qf) ))
         end
         if partial
@@ -599,23 +599,24 @@ function matrix_normal_ar_lkjinv_quote(M, N, T, (track_y, track_μ, track_Λ, tr
     end
     quote
         $initialize_block
-        for ifrac ∈ 1:size(Y.data, 3)
+        @vectorize $T for ifrac ∈ 1:size(Y.data, 3)
             $loop_block
         end
         $closing_block
         $return_expr
     end
 end
-@generated function Normal_logeval_dropconst(
-            Y::AbstractScatteredArray{T,2,<: Union{SMatrix{M,N,T},AbstractFixedSizePaddedMatrix{M,N,T}},1,2},
+@generated function Normal(
+            Y::AbstractScatteredArray{T,2,<: Union{SMatrix{M,N,T},AbstractFixedSizePaddedMatrix{M,N,T}},1},
             μ::Union{<:SMatrix{M,N,T},<:AbstractFixedSizePaddedMatrix{M,N,T}},
             Λ::AbstractAutoregressiveMatrix{T,V},
             U::StructuredMatrices.AbstractUpperTriangularMatrix{N,T}, ::Val{track}
+        # ) where {M,N,V,T,track}
         ) where {M,N,T,V,track}
     matrix_normal_ar_lkjinv_quote(M,N,T,track,false)
 end
-@generated function ∂Normal_logeval_dropconst(
-            Y::AbstractScatteredArray{T,2,<: Union{SMatrix{M,N,T},AbstractFixedSizePaddedMatrix{M,N,T}},1,2},
+@generated function ∂Normal(
+            Y::AbstractScatteredArray{T,2,<: Union{SMatrix{M,N,T},AbstractFixedSizePaddedMatrix{M,N,T}},1},
             μ::Union{<:SMatrix{M,N,T},<:AbstractFixedSizePaddedMatrix{M,N,T}},
             Λ::AbstractAutoregressiveMatrix{T,V},
             U::StructuredMatrices.AbstractUpperTriangularMatrix{N,T}, ::Val{track}

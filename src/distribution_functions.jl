@@ -50,7 +50,7 @@ end
 # """
 # Arguments are: y, logitθ
 # """
-# function ∂Bernoulli_logit_logeval_dropconst_quote(y_is_param, logitθ_is_param)
+# function ∂Bernoulli_logit_quote(y_is_param, logitθ_is_param)
 #     @assert y_is_param == false
 #
 #     out = zero(eltype(p))
@@ -66,7 +66,7 @@ push!(FMADD_DISTRIBUTIONS, :Bernoulli_logit)
 # """
 # Arguments are: y, logitθ
 # """
-# function ∂Bernoulli_logit_fmadd_logeval_dropconst_quote(y_is_param, β_is_param, X_is_param, α_is_param)
+# function ∂Bernoulli_logit_fmadd_quote(y_is_param, β_is_param, X_is_param, α_is_param)
 #     @assert y_is_param == false
 #     quote
 #         T = promote_type(eltype(α, X, β))
@@ -82,7 +82,7 @@ push!(FMADD_DISTRIBUTIONS, :Bernoulli_logit)
 # end
 
 
-@generated function Bernoulli_logit_fmadd_logeval_dropconst(y::BitVector, X::AbstractMatrix{T}, β::AbstractVector{T}, α::AbstractFloat,
+@generated function Bernoulli_logit_fmadd(y::BitVector, X::AbstractMatrix{T}, β::AbstractVector{T}, α::AbstractFloat,
                             ::Val{track} = Val{(false,false,true,true)}()) where {T, track}
     y_is_param, β_is_param, X_is_param, α_is_param = track
     @assert y_is_param == false
@@ -115,7 +115,7 @@ push!(FMADD_DISTRIBUTIONS, :Bernoulli_logit)
     end
     q
 end
-@generated function ∂Bernoulli_logit_fmadd_logeval_dropconst(y::BitVector, X::AbstractMatrix{T}, β::AbstractVector{T}, α::AbstractFloat,
+@generated function ∂Bernoulli_logit_fmadd(y::BitVector, X::AbstractMatrix{T}, β::AbstractVector{T}, α::AbstractFloat,
                             ::Val{track}) where {T, track}
     y_is_param, X_is_param, β_is_param, α_is_param = track
     @assert y_is_param == false
@@ -196,29 +196,40 @@ end
     q
 end
 
-push!(DISTRIBUTION_DIFF_RULES, :Bernoulli_logit_fmadd_logeval_dropconst)
+push!(DISTRIBUTION_DIFF_RULES, :Bernoulli_logit_fmadd)
 
-function ∂Bernoulli_logit_fnmadd_logeval_dropconst_quote()
-
-end
-function ∂Bernoulli_logit_fmsub_logeval_dropconst_quote()
+function ∂Bernoulli_logit_fnmadd_quote()
 
 end
-function ∂Bernoulli_logit_fnmsub_logeval_dropconst_quote()
+function ∂Bernoulli_logit_fmsub_quote()
+
+end
+function ∂Bernoulli_logit_fnmsub_quote()
 
 end
 
 
-@generated function LKJ_logeval_dropconst(L::LKJ_Correlation_Cholesky{N,T}, η::T, ::Val{track}) where {N,T,track}
+# @generated function LKJ(L::LKJ_Correlation_Cholesky{N,T}, η::T, ::Val{track}) where {N,T,track}
+#     quote
+#         out = zero($T)
+#         @vectorize $T for n ∈ 1:$(N-1)
+#             out += ($(N - 3) - n + 2η) * log(L[n+1])
+#         end
+#         out
+#     end
+# end
+
+@generated function LKJ(L::LKJ_Correlation_Cholesky{N,T}, η::T, ::Val{track}) where {N,T,track}
     quote
         out = zero($T)
+        # @fastmath @inbounds @simd ivdep for n ∈ 1:$(N-1)
         @vectorize $T for n ∈ 1:$(N-1)
-            out += ($(N - 3) - n + 2η) * log(L[n+1])
+            out += ($(N - 3) - n + 2η) * SLEEFPirates.log(L[n+1])
         end
         out
     end
 end
-@generated function ∂LKJ_logeval_dropconst(L::LKJ_Correlation_Cholesky{N,T}, η::T, ::Val{track}) where {N,T,track}
+@generated function ∂LKJ(L::LKJ_Correlation_Cholesky{N,T}, η::T, ::Val{track}) where {N,T,track}
     track_L, track_η = track
     if track_L && track_η
         quote
@@ -227,6 +238,7 @@ end
             @inbounds ∂L[1] = 0
             ∂η = zero($T)
             @vectorize $T for n ∈ 1:$(N-1)
+            # @fastmath @inbounds @simd ivdep for n ∈ 1:$(N-1)
                 ∂ηₙ = log(L[n+1])
                 coef = ($(N - 3) - n + 2η)
                 out += coef * ∂ηₙ
@@ -242,6 +254,7 @@ end
             @inbounds ∂L[1] = 0
             ∂η = zero($T)
             @vectorize $T for n ∈ 1:$(N-1)
+            # @fastmath @inbounds @simd ivdep for n ∈ 1:$(N-1)
                 ∂ηₙ = log(L[n+1])
                 coef = ($(N - 3) - n + 2η)
                 out += coef * ∂ηₙ
@@ -254,6 +267,7 @@ end
             out = zero($T)
             ∂η = zero($T)
             @vectorize $T for n ∈ 1:$(N-1)
+            # @fastmath @inbounds @simd ivdep for n ∈ 1:$(N-1)
                 ∂ηₙ = log(L[n+1])
                 coef = ($(N - 3) - n + 2η)
                 out += coef * ∂ηₙ
@@ -265,6 +279,7 @@ end
         quote
             out = zero($T)
             @vectorize $T for n ∈ 1:$(N-1)
+            # @fastmath @inbounds @simd ivdep for n ∈ 1:$(N-1)
                 ∂ηₙ = log(L[n+1])
                 coef = ($(N - 3) - n + 2η)
                 out += coef * ∂ηₙ
@@ -273,7 +288,7 @@ end
         end
     end
 end
-push!(DISTRIBUTION_DIFF_RULES, :LKJ_logeval_dropconst)
+push!(DISTRIBUTION_DIFF_RULES, :LKJ)
 
 
 function gamma_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_β), partial)
@@ -300,7 +315,7 @@ function gamma_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_�
         lgammaαexpr = :(lgammaα)
         αm1expr = :(αm1)
         push!(pre_quote.args, :(lgammaα = SpecialFunctions.lgamma(α)))
-        push!(pre_quote.args, :(αm1 = α[i] - one(eltype(α))))
+        push!(pre_quote.args, :(αm1 = α - one(eltype(α))))
     end
     if βisvec
         βexpr = :(β[i])
@@ -401,6 +416,7 @@ function gamma_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_�
             @fastmath begin
                 $pre_quote
             end
+            out = zero($T)
             @vectorize $T for i ∈ 1:$M
                 $q
             end
@@ -421,32 +437,32 @@ function gamma_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_�
 end
 
 # α * log(β) + (α-1) * log(y) - β*y - lgamma(α)
-function Gamma_logeval_dropconst(
+@generated function Gamma(
             y::PaddedMatrices.AbstractFixedSizePaddedVector{M,T},
-            α::Union{T,<:PaddedMatrices.AbstractFixedSizePaddedVector{M,T}},
-            β::Union{T,<:PaddedMatrices.AbstractFixedSizePaddedVector{M,T}},
+            α::Union{T, <: PaddedMatrices.AbstractFixedSizePaddedVector{M,T}},
+            β::Union{T, <: PaddedMatrices.AbstractFixedSizePaddedVector{M,T}},
             ::Val{track}) where {track,T,M}
-    αisvec = α <: PaddedMatrices.AbstractFixedSizePaddedVector
-    βisvec = β <: PaddedMatrices.AbstractFixedSizePaddedVector
+    αisvec = isa(α, PaddedMatrices.AbstractFixedSizePaddedVector)
+    βisvec = isa(β, PaddedMatrices.AbstractFixedSizePaddedVector)
     gamma_quote(M, T, true, αisvec, βisvec, track, false)
 end
-function ∂Gamma_logeval_dropconst(
+@generated function ∂Gamma(
             y::PaddedMatrices.AbstractFixedSizePaddedVector{M,T},
             α::Union{T,<:PaddedMatrices.AbstractFixedSizePaddedVector{M,T}},
             β::Union{T,<:PaddedMatrices.AbstractFixedSizePaddedVector{M,T}},
             ::Val{track}) where {track,T,M}
-    αisvec = α <: PaddedMatrices.AbstractFixedSizePaddedVector
-    βisvec = β <: PaddedMatrices.AbstractFixedSizePaddedVector
+    αisvec = isa(α, PaddedMatrices.AbstractFixedSizePaddedVector)
+    βisvec = isa(β, PaddedMatrices.AbstractFixedSizePaddedVector)
     gamma_quote(M, T, true, αisvec, βisvec, track, true)
 end
-function Gamma_logeval_dropconst(y::T, α::T, β::T, ::Val{track}) where {track,T <: Real}
+@generated function Gamma(y::T, α::T, β::T, ::Val{track}) where {track,T <: Real}
     gamma_quote(1, T, false, false, false, track, false)
 end
-function ∂Gamma_logeval_dropconst(y::T, α::T, β::T, ::Val{track}) where {track,T <: Real}
+@generated function ∂Gamma(y::T, α::T, β::T, ::Val{track}) where {track,T <: Real}
     gamma_quote(1, T, false, false, false, track, true)
 end
 
-push!(DISTRIBUTION_DIFF_RULES, :Gamma_logeval_dropconst)
+push!(DISTRIBUTION_DIFF_RULES, :Gamma)
 
 
 
@@ -481,7 +497,7 @@ function beta_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_β
         # digammaαexpr = :(lgammaα)
         αm1expr = :(αm1)
         # push!(pre_quote.args, :(lgammaα = lgamma(α)))
-        push!(pre_quote.args, :(αm1 = α[i] - one(α)))
+        push!(pre_quote.args, :(αm1 = α - one(α)))
     end
     if βisvec
         βexpr = :(β[i])
@@ -492,13 +508,13 @@ function beta_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_β
         # digammaαexpr = :(lgammaα)
         βm1expr = :(βm1)
         # push!(pre_quote.args, :(lgammaα = lgamma(α)))
-        push!(pre_quote.args, :(βm1 = β[i] - one(β)))
+        push!(pre_quote.args, :(βm1 = β - one(β)))
     end
     if αisvec || βisvec
         lbetaβexpr = :(SpecialFunctions.lbeta($αexpr, $βexpr))
     else # neither are vectors
         lbetaβexpr = :lbetaαβ
-        push!(pre_quote, :(lbetaαβ = SpecialFunctions.lbeta(α, β)))
+        push!(pre_quote.args, :(lbetaαβ = SpecialFunctions.lbeta(α, β)))
     end
 
     if partial
@@ -600,6 +616,7 @@ function beta_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_β
             @fastmath begin
                 $pre_quote
             end
+            out = zero($T)
             @vectorize $T for i ∈ 1:$M
                 $q
             end
@@ -620,28 +637,28 @@ function beta_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_β
 end
 
 # α * log(β) + (α-1) * log(y) - β*y - lgamma(α)
-function Beta_logeval_dropconst(
+@generated function Beta(
             y::PaddedMatrices.AbstractFixedSizePaddedVector{M,T},
-            α::Union{T,<:PaddedMatrices.AbstractFixedSizePaddedVector{M,T}},
-            β::Union{T,<:PaddedMatrices.AbstractFixedSizePaddedVector{M,T}},
+            α::Union{T,Int,<:PaddedMatrices.AbstractFixedSizePaddedVector{M,T}},
+            β::Union{T,Int,<:PaddedMatrices.AbstractFixedSizePaddedVector{M,T}},
             ::Val{track}) where {track,T,M}
-    αisvec = α <: PaddedMatrices.AbstractFixedSizePaddedVector
-    βisvec = β <: PaddedMatrices.AbstractFixedSizePaddedVector
+    αisvec = isa(α, PaddedMatrices.AbstractFixedSizePaddedVector)
+    βisvec = isa(β, PaddedMatrices.AbstractFixedSizePaddedVector)
     beta_quote(M, T, true, αisvec, βisvec, track, false)
 end
-function ∂Beta_logeval_dropconst(
+@generated function ∂Beta(
             y::PaddedMatrices.AbstractFixedSizePaddedVector{M,T},
-            α::Union{T,<:PaddedMatrices.AbstractFixedSizePaddedVector{M,T}},
-            β::Union{T,<:PaddedMatrices.AbstractFixedSizePaddedVector{M,T}},
+            α::Union{T,Int,<:PaddedMatrices.AbstractFixedSizePaddedVector{M,T}},
+            β::Union{T,Int,<:PaddedMatrices.AbstractFixedSizePaddedVector{M,T}},
             ::Val{track}) where {track,T,M}
-    αisvec = α <: PaddedMatrices.AbstractFixedSizePaddedVector
-    βisvec = β <: PaddedMatrices.AbstractFixedSizePaddedVector
+    αisvec = isa(α, PaddedMatrices.AbstractFixedSizePaddedVector)
+    βisvec = isa(β, PaddedMatrices.AbstractFixedSizePaddedVector)
     beta_quote(M, T, true, αisvec, βisvec, track, true)
 end
-function Beta_logeval_dropconst(y::T, α::T, β::T, ::Val{track}) where {track,T <: Real}
-    beta_quote(M, T, false, false, false, track, false)
+@generated function Beta(y::T, α::Union{T,Int}, β::Union{T,Int}, ::Val{track}) where {T <: Real,track}
+    beta_quote(1, T, false, false, false, track, false)
 end
-function ∂Beta_logeval_dropconst(y::T, α::T, β::T, ::Val{track}) where {track,T <: Real}
-    beta_quote(M, T, false, false, false, track, true)
+@generated function ∂Beta(y::T, α::Union{T,Int}, β::Union{T,Int}, ::Val{track}) where {track,T <: Real}
+    beta_quote(1, T, false, false, false, track, true)
 end
-push!(DISTRIBUTION_DIFF_RULES, :Beta_logeval_dropconst)
+push!(DISTRIBUTION_DIFF_RULES, :Beta)
