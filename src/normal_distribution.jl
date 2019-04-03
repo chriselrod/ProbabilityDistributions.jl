@@ -122,7 +122,7 @@ function univariate_normal_quote(
             if yisvec
                 push!(pre_quote.args, :(∂y = MutableFixedSizePaddedVector{$M,$T}(undef) ))
                 push!(loop_expr.args, :(∂y[i] = - δσ))
-                push!(return_expr.args, :(ConstantFixedSizePaddedVector(∂y)))
+                push!(return_expr.args, :(ConstantFixedSizePaddedVector(∂y)'))
             else
                 push!(pre_quote.args, :(∂y = zero($T)))
                 push!(loop_expr.args, :(∂y -= δσ))
@@ -133,7 +133,7 @@ function univariate_normal_quote(
             if μisvec == true
                 push!(pre_quote.args, :(∂μ = MutableFixedSizePaddedVector{$M,$T}(undef) ))
                 push!(loop_expr.args, :(∂μ[i] = δσ))
-                push!(return_expr.args, :(ConstantFixedSizePaddedVector(∂μ)))
+                push!(return_expr.args, :(ConstantFixedSizePaddedVector(∂μ)'))
             elseif μisvec == false
                 push!(pre_quote.args, :(∂μ = zero($T)))
                 push!(loop_expr.args, :(∂μ += δσ))
@@ -144,7 +144,7 @@ function univariate_normal_quote(
             if σisvec == true
                 push!(pre_quote.args, :(∂σ = MutableFixedSizePaddedVector{$M,$T}(undef) ))
                 push!(loop_expr.args, :(∂σ[i] = δσ² * σ⁻¹ - σ⁻¹ ))
-                push!(return_expr.args, :(ConstantFixedSizePaddedVector(∂σ)))
+                push!(return_expr.args, :(ConstantFixedSizePaddedVector(∂σ)'))
             elseif σisvec == false
                 push!(pre_quote.args, :(∂σ = zero($T)))
                 push!(loop_expr.args, :(∂σ += δσ² * σ⁻¹ - σ⁻¹ ))
@@ -265,7 +265,7 @@ end
 @generated function Normal(y::T, ::Val{track}) where {track,T <: Real}
     univariate_normal_quote(1, T, false, nothing, nothing, (track[1], false, false), false, true)
 end
-@generated function Normal(y::AbstractFixedSizePaddedVector{M,T}, σ::Union{T,Int}, ::Val{track}) where {M, T <: Real, track}
+@generated function Normal(y::AbstractFixedSizePaddedVector{M,T}, σ::Union{T,Int}, ::Val{track}) where {T <: Real, M, track}
     univariate_normal_quote(
                     M, T, true, nothing, false,
                     (track[1], false, track[2]), false, true)
@@ -277,7 +277,7 @@ end
 end
 @generated function Normal(
                 y::AbstractFixedSizePaddedVector{M,T},
-                σ²::Union{LinearAlgebra.UniformScaling{T},LinearAlgebra.UniformScaling{Int}}, ::Val{track})::T where {M, T <: Real, track}
+                σ²::Union{LinearAlgebra.UniformScaling{T},LinearAlgebra.UniformScaling{Int}}, ::Val{track})::T where {T <: Real, M, track}
     univariate_normal_quote(
                     M, T, true, nothing, false,
                     (track[1], false, track[2]), false, false)
@@ -335,36 +335,36 @@ end
 @generated function ∂Normal(y::T, ::Val{track}) where {track,T <: Real}
     univariate_normal_quote(1, T, false, nothing, nothing, (track[1], false, false), true, true)
 end
-@generated function ∂Normal(y::AbstractFixedSizePaddedVector{M,T}, σ::T, ::Val{track}) where {M, T <: Real, track}
+@generated function ∂Normal(y::AbstractFixedSizePaddedVector{M,T}, σ::Union{T,Int}, ::Val{track}) where {M, T <: Real, track}
     univariate_normal_quote(
                     M, T, true, nothing, false,
                     (track[1], false, track[2]), true, true)
 end
-@generated function ∂Normal(y::T, σ::T, ::Val{track}) where {T <: Real, track}
+@generated function ∂Normal(y::T, σ::Union{T,Int}, ::Val{track}) where {T <: Real, track}
     univariate_normal_quote(
                     1, T, false, nothing, false,
                     (track[1], false, track[2]), true, true)
 end
 @generated function ∂Normal(
                 y::AbstractFixedSizePaddedVector{M,T},
-                σ²::LinearAlgebra.UniformScaling{T}, ::Val{track}) where {M, T <: Real, track}
+                σ²::Union{LinearAlgebra.UniformScaling{T},LinearAlgebra.UniformScaling{Int}}, ::Val{track}) where {M, T <: Real, track}
     univariate_normal_quote(
                     M, T, true, nothing, false,
                     (track[1], false, track[2]), true, false)
 end
-@generated function ∂Normal(y::T, σ²::LinearAlgebra.UniformScaling{T}, ::Val{track}) where {T <: Real, track}
+@generated function ∂Normal(y::T, σ²::Union{LinearAlgebra.UniformScaling{T},LinearAlgebra.UniformScaling{Int}}, ::Val{track}) where {T <: Real, track}
     univariate_normal_quote(
                     1, T, false, nothing, false,
                     (track[1], false, track[2]), true, false)
 end
 
-@generated function ∂Normal(y::T, μ::T, σ::T, ::Val{track}) where {T <: Real, track}
+@generated function ∂Normal(y::T, μ::Union{T,Int}, σ::Union{T,Int}, ::Val{track}) where {T <: Real, track}
     univariate_normal_quote( 1, T, false, false, false, track, true, true)
 end
 @generated function ∂Normal(
                     y::AbstractFixedSizePaddedVector{M,T},
-                    μ::Union{T,<:AbstractFixedSizePaddedVector{M,T}},
-                    σ::Union{T,<:AbstractFixedSizePaddedVector{M,T}},
+                    μ::Union{T,Int,<:AbstractFixedSizePaddedVector{M,T}},
+                    σ::Union{T,Int,<:AbstractFixedSizePaddedVector{M,T}},
                     ::Val{track}) where {M, T <: Real, track}
     univariate_normal_quote( M, T, true,
         μ <: AbstractFixedSizePaddedVector, σ <: AbstractFixedSizePaddedVector, track, true, true)
@@ -372,14 +372,14 @@ end
 @generated function ∂Normal(
                     y::T,
                     μ::AbstractFixedSizePaddedVector{M,T},
-                    σ::Union{T,<:AbstractFixedSizePaddedVector{M,T}},
+                    σ::Union{T,Int,<:AbstractFixedSizePaddedVector{M,T}},
                     ::Val{track}) where {M, T <: Real, track}
     univariate_normal_quote( M, T, false,
         true, σ <: AbstractFixedSizePaddedVector, track, true, true)
 end
 @generated function ∂Normal(
                     y::T,
-                    μ::T,
+                    μ::Union{T,Int},
                     σ::AbstractFixedSizePaddedVector{M,T},
                     ::Val{track}) where {M, T <: Real, track}
     univariate_normal_quote( M, T, false, false, true, track, true, true)
@@ -400,16 +400,20 @@ end
 
 function matrix_normal_ar_lkj_quote(M, N, T, (track_y, track_μ, track_Λ, track_L), partial)
     W, Wshift = VectorizationBase.pick_vector_width_shift(T)
+    V = Vec{W,T}
     @assert track_y == false
     initialize_block = quote
         Λᵥ = StructuredMatrices.cache(Λ)
         Ny = length(Y)
         qf = vbroadcast(Vec{$W,$T}, zero($T))
+        δ = MutableFixedSizePaddedMatrix{$M,$N,$V}(undef)
+        δU = MutableFixedSizePaddedMatrix{$M,$N,$V}(undef)
         Yᵥ = vectorizable(Y)
-        i = 1
+        i = 0
     end
     loop_block = quote
-        PaddedMatrices.diff!(δ, μ, Yᵥ[i])
+        Yblock = SIMDPirates.vload($V, Yᵥ + i)
+        PaddedMatrices.diff!(δ, μ, Yblock)
         mul!(δU, δ, U)
     end
     closing_block = quote end
@@ -425,12 +429,12 @@ function matrix_normal_ar_lkj_quote(M, N, T, (track_y, track_μ, track_Λ, track
         end
         if track_Λ
             push!(initialize_block.args, :(∂qf∂Λ = vbroadcast(Vec{$W,$T}, zero($T))))
-            push!(closing_block.args, :(logdetΛ, ∂logdetΛ = ∂logdet(Λ)))
+            push!(closing_block.args, :((logdetΛ, ∂logdetΛ) = StructuredMatrices.∂logdet(Λ)))
             push!(return_expr.args, :(SIMDPirates.vsum(∂qf∂Λ)))
         end
         if track_L
             push!(initialize_block.args, :((U, ∂U∂L) = StructuredMatrices.∂inv(L)))
-            push!(closing_block.args, :(logdetL, ∂logdetL = StructuredMatrices.∂logdet(L)))
+            push!(closing_block.args, :((logdetL, ∂logdetL) = StructuredMatrices.∂logdet(L)))
             push!(initialize_block.args, :(∂qf∂U = zero(StructuredMatrices.MutableUpperTriangularMatrix{N,Vec{$W,$T},$(StructuredMatrices.binomial2(N+1))})))
             push!(return_expr.args, :∂qf∂L)
         else
@@ -442,22 +446,22 @@ function matrix_normal_ar_lkj_quote(M, N, T, (track_y, track_μ, track_Λ, track
             if track_Λ
                 push!(loop_block.args, quote
                     qfᵢ, ∂qf∂Λᵢ = StructuredMatrices.∂selfcrossmul_and_quadform!(Λᵥ′ΛᵥδU, Λᵥ, δU)
-                    qf = SIMDPirates.vmuladd($(T(-0.5)), qfᵢ, qf)
+                    qf = SIMDPirates.vadd(qfᵢ, qf)
                     ∂qf∂Λ = SIMDPirates.vadd(∂qf∂Λᵢ, ∂qf∂Λ)
                 end)
             else
                 push!(loop_block.args, quote
-                    qf = SIMDPirates.vmuladd($(T(-0.5)), StructuredMatrices.selfcrossmul_and_quadform!(Λᵥ′ΛᵥδU, Λᵥ, δU), qf)
+                    qf = SIMDPirates.vadd(StructuredMatrices.selfcrossmul_and_quadform!(Λᵥ′ΛᵥδU, Λᵥ, δU), qf)
                 end)
             end
         elseif track_Λ
             push!(loop_block.args, quote
                 qfᵢ, ∂qf∂Λᵢ = StructuredMatrices.∂quadform(Λᵥ, δU)
-                qf = SIMDPirates.vmuladd($(T(-0.5)), qfᵢ, qf)
+                qf = SIMDPirates.vadd(qfᵢ, qf)
                 ∂qf∂Λ = SIMDPirates.vadd(∂qf∂Λᵢ, ∂qf∂Λ)
             end)
         else
-            push!(loop_block.args, :(qf = SIMDPirates.vmuladd($(T(-0.5)), StructuredMatrices.quadform(Λᵥ, δU), qf)))
+            push!(loop_block.args, :(qf = SIMDPirates.vadd(StructuredMatrices.quadform(Λᵥ, δU), qf)))
         end
         track_L && push!(loop_block.args, :(StructuredMatrices.submul!(∂qf∂U, δ', Λᵥ′ΛᵥδU)))
         track_μ && push!(loop_block.args, :(StructuredMatrices.submul!(∂qf∂δ, Λᵥ′ΛᵥδU, U')))
@@ -465,7 +469,7 @@ function matrix_normal_ar_lkj_quote(M, N, T, (track_y, track_μ, track_Λ, track
         track_L && push!(closing_block.args, :(logdetL = logdet(L)))
         track_Λ && push!(closing_block.args, :(logdetΛ = logdet(Λ)))
 
-        push!(loop_block.args, :(qf = SIMDPirates.vmuladd($(T(-0.5)), StructuredMatrices.quadform(Λᵥ, δU), qf)))
+        push!(loop_block.args, :(qf = SIMDPirates.vadd(StructuredMatrices.quadform(Λᵥ, δU), qf)))
     end
     push!(loop_block.args, :(i += $W))
     # Here we handle the log determinants
@@ -492,7 +496,7 @@ function matrix_normal_ar_lkj_quote(M, N, T, (track_y, track_μ, track_Λ, track
             $loop_block
         end
         $closing_block
-        $return_expr
+        $(return_expression(return_expr))
     end
 end
 
@@ -514,17 +518,20 @@ end
 end
 function matrix_normal_ar_lkjinv_quote(M, N, T, (track_y, track_μ, track_Λ, track_U), partial)
     W, Wshift = VectorizationBase.pick_vector_width_shift(T)
+    V = Vec{W,T}
     @assert track_y == false
     initialize_block = quote
         Λᵥ = StructuredMatrices.cache(Λ)
         Ny = length(Y)
         qf = vbroadcast(Vec{$W,$T}, zero($T))
         Yᵥ = vectorizable(Y)
-        δ = MutableFixedSizePaddedMatrix{$M,$N,$T}(undef)
-        i = 1
+        δ = MutableFixedSizePaddedMatrix{$M,$N,$V}(undef)
+        δU = MutableFixedSizePaddedMatrix{$M,$N,$V}(undef)
+        i = 0
     end
     loop_block = quote
-        PaddedMatrices.diff!(δ, μ, Yᵥ[i])
+        Yblock = SIMDPirates.vload($V, Yᵥ + i)
+        PaddedMatrices.diff!(δ, μ, Yblock)
         mul!(δU, δ, U)
     end
     closing_block = quote end
@@ -540,11 +547,11 @@ function matrix_normal_ar_lkjinv_quote(M, N, T, (track_y, track_μ, track_Λ, tr
         end
         if track_Λ
             push!(initialize_block.args, :(∂qf∂Λ = vbroadcast(Vec{$W,$T}, zero($T))))
-            push!(closing_block.args, :(logdetΛ, ∂logdetΛ = ∂logdet(Λ)))
+            push!(closing_block.args, :((logdetΛ, ∂logdetΛ) = StructuredMatrices.∂logdet(Λ)))
             push!(return_expr.args, :(SIMDPirates.vsum(∂qf∂Λ)))
         end
         if track_U
-            push!(closing_block.args, :(logdetU, ∂logdetU = StructuredMatrices.∂logdet(U)))
+            push!(closing_block.args, :((logdetU, ∂logdetU) = StructuredMatrices.∂logdet(U)))
             push!(initialize_block.args, :(∂qf∂U = zero(StructuredMatrices.MutableUpperTriangularMatrix{N,Vec{$W,$T},$(StructuredMatrices.binomial2(N+1))})))
             push!(return_expr.args, :∂out∂U)
         end
@@ -554,22 +561,22 @@ function matrix_normal_ar_lkjinv_quote(M, N, T, (track_y, track_μ, track_Λ, tr
             if track_Λ
                 push!(loop_block.args, quote
                     qfᵢ, ∂qf∂Λᵢ = StructuredMatrices.∂selfcrossmul_and_quadform!(Λᵥ′ΛᵥδU, Λᵥ, δU)
-                    qf = SIMDPirates.vmuladd($(T(-0.5)), qfᵢ, qf)
+                    qf = SIMDPirates.vadd(qfᵢ, qf)
                     ∂qf∂Λ = SIMDPirates.vadd(∂qf∂Λᵢ, ∂qf∂Λ)
                 end)
             else
                 push!(loop_block.args, quote
-                    qf = SIMDPirates.vmuladd($(T(-0.5)), StructuredMatrices.selfcrossmul_and_quadform!(Λᵥ′ΛᵥδU, Λᵥ, δU), qf)
+                    qf = SIMDPirates.vadd(StructuredMatrices.selfcrossmul_and_quadform!(Λᵥ′ΛᵥδU, Λᵥ, δU), qf)
                 end)
             end
         elseif track_Λ
             push!(loop_block.args, quote
                 qfᵢ, ∂qf∂Λᵢ = StructuredMatrices.∂quadform(Λᵥ, δU)
-                qf = SIMDPirates.vmuladd($(T(-0.5)), qfᵢ, qf)
+                qf = SIMDPirates.vadd(qfᵢ, qf)
                 ∂qf∂Λ = SIMDPirates.vadd(∂qf∂Λᵢ, ∂qf∂Λ)
             end)
         else
-            push!(loop_block.args, :(qf = SIMDPirates.vmuladd($(T(-0.5)), StructuredMatrices.quadform(Λᵥ, δU), qf)))
+            push!(loop_block.args, :(qf = SIMDPirates.vadd(StructuredMatrices.quadform(Λᵥ, δU), qf)))
         end
         track_U && push!(loop_block.args, :(StructuredMatrices.submul!(∂qf∂U, δ', Λᵥ′ΛᵥδU)))
         track_μ && push!(loop_block.args, :(StructuredMatrices.submul!(∂qf∂δ, Λᵥ′ΛᵥδU, U')))
@@ -577,7 +584,7 @@ function matrix_normal_ar_lkjinv_quote(M, N, T, (track_y, track_μ, track_Λ, tr
         track_U && push!(closing_block.args, :(logdetU = logdet(U)))
         track_Λ && push!(closing_block.args, :(logdetΛ = logdet(Λ)))
 
-        push!(loop_block.args, :(qf = SIMDPirates.vmuladd($(T(-0.5)), StructuredMatrices.quadform(Λᵥ, δU), qf)))
+        push!(loop_block.args, :(qf = SIMDPirates.vadd(StructuredMatrices.quadform(Λᵥ, δU), qf)))
     end
     push!(loop_block.args, :(i += $W))
     # Here we handle the log determinants
@@ -589,7 +596,12 @@ function matrix_normal_ar_lkjinv_quote(M, N, T, (track_y, track_μ, track_Λ, tr
         end
         if partial
             push!(closing_block.args, quote
-                ∂out∂U = SIMDPirates.vmuladd($T(Ny * $M), ∂logdetU, StructuredMatrices.vsumvec(∂qf∂U))'
+                ∂qf∂Usummed = StructuredMatrices.vsum(∂qf∂U)
+                coef = $T(Ny * $M)
+                @vectorize $T for n ∈ 1:$N
+                    ∂qf∂Usummed[n] = coef * ∂logdetU[n] + ∂qf∂Usummed[n]
+                end
+                ∂out∂U = UpperTriangularMatrix(∂qf∂Usummed)
             end)
         end
     elseif track_Λ
@@ -599,11 +611,11 @@ function matrix_normal_ar_lkjinv_quote(M, N, T, (track_y, track_μ, track_Λ, tr
     end
     quote
         $initialize_block
-        @vectorize $T for ifrac ∈ 1:size(Y.data, 3)
+        for ifrac ∈ 1:size(Y.data, 3)
             $loop_block
         end
         $closing_block
-        $return_expr
+        $(return_expression(return_expr))
     end
 end
 @generated function Normal(
@@ -611,8 +623,8 @@ end
             μ::Union{<:SMatrix{M,N,T},<:AbstractFixedSizePaddedMatrix{M,N,T}},
             Λ::AbstractAutoregressiveMatrix{T,V},
             U::StructuredMatrices.AbstractUpperTriangularMatrix{N,T}, ::Val{track}
-        # ) where {M,N,V,T,track}
-        ) where {M,N,T,V,track}
+        ) where {M,N,V,T,track}
+        # ) where {M,N,T,V,track}
     matrix_normal_ar_lkjinv_quote(M,N,T,track,false)
 end
 @generated function ∂Normal(
@@ -620,6 +632,7 @@ end
             μ::Union{<:SMatrix{M,N,T},<:AbstractFixedSizePaddedMatrix{M,N,T}},
             Λ::AbstractAutoregressiveMatrix{T,V},
             U::StructuredMatrices.AbstractUpperTriangularMatrix{N,T}, ::Val{track}
+        # ) where {M,N,V,T,track}
         ) where {M,N,T,V,track}
     matrix_normal_ar_lkjinv_quote(M,N,T,track,true)
 end

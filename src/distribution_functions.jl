@@ -136,7 +136,7 @@ end
             # push!(partial_exprs, :(∂P = OmP * P))
             push!(partial_exprs, :(∂logP = OmP ))
             push!(partial_exprs, :(∂logOmP = - P))
-            push!(out_expr.args, :(ConstantFixedSizePaddedVector{$N_β}($(Expr(:tuple, [Symbol(:∂βP_, n) for n ∈ 1:N_β]...,[zero(T) for n ∈ 1:L_β-N_β]...)))))
+            push!(out_expr.args, :(ConstantFixedSizePaddedVector{$N_β}($(Expr(:tuple, [Symbol(:∂βP_, n) for n ∈ 1:N_β]...,[zero(T) for n ∈ 1:L_β-N_β]...)))'))
             for n ∈ 1:N_β
                 push!(init_q.args, :($(Symbol(:∂βP_, n)) = zero($T)) )
             end
@@ -330,37 +330,52 @@ function gamma_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_�
         if track_y
             if yisvec
                 ∂yassignment = :(=)
-                ∂ystorage = :(∂y[i])
+                ∂ystorage = :(∂yᵢ)
                 push!(pre_quote.args, :(∂y = PaddedMatrices.MutableFixedSizePaddedVector{$M,$T}(undef)))
-                push!(return_expr.args, :(PaddedMatrices.ConstantFixedSizePaddedVector(∂y)))
+                push!(return_expr.args, :(PaddedMatrices.ConstantFixedSizePaddedVector(∂y)'))
             else
-                ∂yassignment = :(+=)
                 ∂ystorage = :∂y
                 push!(return_expr.args, :(∂y))
+                if loop
+                    ∂yassignment = :(+=)
+                    push!(pre_quote.args, :(∂y = zero($T)))
+                else
+                    ∂yassignment = :(=)
+                end
             end
         end
         if track_α
             if αisvec
                 ∂αassignment = :(=)
-                ∂αstorage = :(∂α[i])
+                ∂αstorage = :(∂αᵢ)
                 push!(pre_quote.args, :(∂α = PaddedMatrices.MutableFixedSizePaddedVector{$M,$T}(undef)))
-                push!(return_expr.args, :(PaddedMatrices.ConstantFixedSizePaddedVector(∂α)))
+                push!(return_expr.args, :(PaddedMatrices.ConstantFixedSizePaddedVector(∂α)'))
             else
-                ∂αassignment = :(+=)
                 ∂αstorage = :(∂α)
                 push!(return_expr.args, :(∂α))
+                if loop
+                    ∂αassignment = :(+=)
+                    push!(pre_quote.args, :(∂α = zero($T)))
+                else
+                    ∂αassignment = :(=)
+                end
             end
         end
         if track_β
             if βisvec
                 ∂βassignment = :(=)
-                ∂βstorage = :(∂β[i])
+                ∂βstorage = :(∂βᵢ)
                 push!(pre_quote.args, :(∂β = PaddedMatrices.MutableFixedSizePaddedVector{$M,$T}(undef)))
-                push!(return_expr.args, :(PaddedMatrices.ConstantFixedSizePaddedVector(∂β)))
+                push!(return_expr.args, :(PaddedMatrices.ConstantFixedSizePaddedVector(∂β)'))
             else
-                ∂βassignment = :(+=)
                 ∂βstorage = :(∂β)
                 push!(return_expr.args, :(∂β))
+                if loop
+                    ∂βassignment = :(+=)
+                    push!(pre_quote.args, :(∂β = zero($T)))
+                else
+                    ∂βassignment = :(=)
+                end
             end
         end
     end
@@ -386,7 +401,13 @@ function gamma_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_�
             initialized = true
         end
         if partial
-            track_α && push!(q.args, Expr(:(+=), ∂αstorage, :ly) )
+            if track_α
+                if αisvec
+                    push!(q.args, Expr(:(=), :∂α₂, :($αstorage + ly)) )
+                else
+                    push!(q.args, Expr(:(+=), ∂αstorage, :ly) )
+                end
+            end
             track_y && push!(q.args, Expr(∂yassignment, ∂ystorage, :($αm1expr / $yexpr) ) )
         end
     end
@@ -394,8 +415,20 @@ function gamma_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_�
         # initialized == true
         push!(q.args, :(out -= $βexpr*$yexpr))
         if partial
-            track_β && push!(q.args, Expr(:(-=), ∂βstorage, yexpr ) )
-            track_y && push!(q.args, Expr(:(-=), ∂ystorage, βexpr ) )
+            if track_β
+                if βisvec
+                    push!(q.args, Expr(:(=), :(∂β[i]), :($∂βstorage - $yexpr) ) )
+                else
+                    push!(q.args, Expr(:(-=), ∂βstorage, yexpr ) )
+                end
+            end
+            if track_y
+                if yisvec
+                    push!(q.args, Expr(:(=), :(∂y[i]), :($∂ystorage - $βexpr) ) )
+                else
+                    push!(q.args, Expr(:(-=), ∂ystorage, βexpr ) )
+                end
+            end
         end
     end
     if track_α
@@ -404,7 +437,7 @@ function gamma_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_�
 
         if partial
             if αisvec
-                push!(q.args, Expr(:(-=), ∂αstorage, :( SpecialFunctions.digamma($αexpr) ) ) )
+                push!(q.args, Expr(:(=), :(∂α[i]), :(∂α₂ - SpecialFunctions.digamma($αexpr) ) ) )
             else
                 push!(pre_quote.args, Expr(:(-=), ∂αstorage, :($M * SpecialFunctions.digamma(α)) ) )
             end
@@ -480,18 +513,18 @@ function beta_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_β
     if yisvec
         yexpr = :(y[i])
         logyexpr = :(SLEEFPirates.log(y[i]))
-        logomyexpr = :(SLEEFPirates.log(one(eltype(y)) - y[i]))
+        logomyexpr = :(SLEEFPirates.log(one($T) - y[i]))
     else
         yexpr = :y
         logyexpr = :logy
         logomyexpr = :logomy
         push!(pre_quote.args, :(logy = Base.log(y)))
-        push!(pre_quote.args, :(logomy = Base.log(one(y) - y)))
+        push!(pre_quote.args, :(logomy = Base.log(one($T) - y)))
     end
     if αisvec
         αexpr = :(α[i])
         # lgammaαexpr = :(lgamma(α[i]))
-        αm1expr = :(α[i] - one(eltype(α)))
+        αm1expr = :(α[i] - one($T))
     else
         αexpr = :α
         # digammaαexpr = :(lgammaα)
@@ -502,13 +535,13 @@ function beta_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_β
     if βisvec
         βexpr = :(β[i])
         # lgammaαexpr = :(lgamma(α[i]))
-        βm1expr = :(β[i] - one(eltype(β)))
+        βm1expr = :(β[i] - one($T))
     else
         βexpr = :β
         # digammaαexpr = :(lgammaα)
         βm1expr = :(βm1)
         # push!(pre_quote.args, :(lgammaα = lgamma(α)))
-        push!(pre_quote.args, :(βm1 = β - one(β)))
+        push!(pre_quote.args, :(βm1 = β - one($T)))
     end
     if αisvec || βisvec
         lbetaβexpr = :(SpecialFunctions.lbeta($αexpr, $βexpr))
@@ -520,44 +553,59 @@ function beta_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_β
     if partial
         if track_y
             if yisvec
-                ∂yassignment = :(=)
-                ∂ystorage = :(∂y[i])
+                yassignment = :(=)
+                ∂ystorage = :∂yᵢ
                 push!(pre_quote.args, :(∂y = PaddedMatrices.MutableFixedSizePaddedVector{$M,$T}(undef)))
-                push!(return_expr.args, :(PaddedMatrices.ConstantFixedSizePaddedVector(∂y)))
+                push!(return_expr.args, :(PaddedMatrices.ConstantFixedSizePaddedVector(∂y)'))
             else
-                ∂yassignment = :(+=)
                 ∂ystorage = :∂y
-                push!(return_expr.args, :(∂y))
+                push!(return_expr.args, :∂y)
+                if loop
+                    push!(pre_quote.args, :(∂y = zero($T)))
+                    yassignment = :(+=)
+                else
+                    yassignment = :(=)
+                end
             end
         end
         if track_α
             if αisvec
-                ∂αassignment = :(=)
-                ∂αstorage = :(∂α[i])
+                αassignment = :(=)
+                ∂αstorage = :∂αᵢ
                 dgαexpr = :(SpecialFunctions.digamma(α[i]))
                 push!(pre_quote.args, :(∂α = PaddedMatrices.MutableFixedSizePaddedVector{$M,$T}(undef)))
-                push!(return_expr.args, :(PaddedMatrices.ConstantFixedSizePaddedVector(∂α)))
+                push!(return_expr.args, :(PaddedMatrices.ConstantFixedSizePaddedVector(∂α)'))
             else
-                ∂αassignment = :(+=)
-                ∂αstorage = :(∂α)
+                ∂αstorage = :∂α
                 dgαexpr = :dgα
                 push!(pre_quote.args, :(dgα = SpecialFunctions.digamma(α)))
                 push!(return_expr.args, :(∂α))
+                if loop
+                    push!(pre_quote.args, :(∂α = zero($T)))
+                    αassignment = :(+=)
+                else
+                    αassignment = :(=)
+                end
             end
         end
         if track_β
             if βisvec
-                ∂βassignment = :(=)
-                ∂βstorage = :(∂β[i])
+                βassignment = :(=)
+                ∂βstorage = :(∂βᵢ)
                 dgβexpr = :(SpecialFunctions.digamma(β[i]))
                 push!(pre_quote.args, :(∂β = PaddedMatrices.MutableFixedSizePaddedVector{$M,$T}(undef)))
-                push!(return_expr.args, :(PaddedMatrices.ConstantFixedSizePaddedVector(∂β)))
+                push!(return_expr.args, :(PaddedMatrices.ConstantFixedSizePaddedVector(∂β)'))
             else
-                ∂βassignment = :(+=)
                 ∂βstorage = :(∂β)
                 dgβexpr = :dgβ
                 push!(pre_quote.args, :(dgβ = SpecialFunctions.digamma(β)))
                 push!(return_expr.args, :(∂β))
+                if loop
+                    push!(pre_quote.args, :(∂β = zero($T)))
+                    βassignment = :(+=)
+                else
+                    βassignment = :(=)
+                end
             end
         end
         if track_α || track_β
@@ -579,8 +627,8 @@ function beta_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_β
             initialized = true
         end
         if partial
-            track_α && push!(q.args, Expr(∂αassignment, ∂αstorage, :logy) )
-            track_y && push!(q.args, Expr(∂yassignment, ∂ystorage, :($αm1 / $yexpr) ) )
+            track_α && push!(q.args, Expr(αassignment, ∂αstorage, :logy) )
+            track_y && push!(q.args, Expr(yassignment, ∂ystorage, :(am1 / $yexpr) ) )
         end
     end
     if track_β || track_y
@@ -593,8 +641,14 @@ function beta_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_β
             initialized = true
         end
         if partial
-            track_β && push!(q.args, Expr(∂βassignment, ∂βstorage, :logomy) )
-            track_y && push!(q.args, Expr(:(-=), ∂ystorage, :( $bm1 / $(one(eltype(y)) - yexpr) ) ))
+            track_β && push!(q.args, Expr(βassignment, ∂βstorage, :logomy) )
+            if track_y
+                if yisvec
+                    push!(q.args, Expr(:(=), :(∂y[i]), :($∂ystorage - bm1 / (one($T) - $yexpr) ) ))
+                else
+                    push!(q.args, Expr(:(=), ∂ystorage, :($∂ystorage - bm1 / (one($T) - $yexpr) ) ))
+                end
+            end
         end
     end
     if track_α || track_β
@@ -606,17 +660,31 @@ function beta_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_β
             initialized = true
         end
         if partial
-            track_α && push!(q.args, Expr(:(+=), ∂αstorage, :(dgαβ - $dgαexpr) ) )
-            track_β && push!(q.args, Expr(:(+=), ∂βstorage, :(dgαβ - $dgβexpr) ) )
+            if track_α
+                if αisvec
+                    push!(q.args, Expr(:(=), :(∂α[i]), :($∂αstorage + dgαβ - $dgαexpr) ) )
+                else
+                    push!(q.args, Expr(:(=), ∂αstorage, :($∂αstorage + dgαβ - $dgαexpr) ) )
+                end
+            end
+            if track_β
+                if βisvec
+                    push!(q.args, Expr(:(=), :(∂β[i]), :($∂βstorage + dgαβ - $dgβexpr) ) )
+                else
+                    push!(q.args, Expr(:(=), ∂βstorage, :($∂βstorage + dgαβ - $dgβexpr) ) )
+                end
+            end
         end
     end
+
+
     if loop
         quote
             $(Expr(:meta,:inline))
             @fastmath begin
                 $pre_quote
+                out = zero($T)
             end
-            out = zero($T)
             @vectorize $T for i ∈ 1:$M
                 $q
             end
@@ -650,6 +718,7 @@ end
             y::PaddedMatrices.AbstractFixedSizePaddedVector{M,T},
             α::Union{T,Int,<:PaddedMatrices.AbstractFixedSizePaddedVector{M,T}},
             β::Union{T,Int,<:PaddedMatrices.AbstractFixedSizePaddedVector{M,T}},
+            # ::Val{track}) where {track,M,T}
             ::Val{track}) where {track,T,M}
     αisvec = isa(α, PaddedMatrices.AbstractFixedSizePaddedVector)
     βisvec = isa(β, PaddedMatrices.AbstractFixedSizePaddedVector)
