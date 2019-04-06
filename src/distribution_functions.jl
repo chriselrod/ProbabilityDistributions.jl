@@ -43,8 +43,10 @@ function distribution_diff_rule!(mod, first_pass, second_pass, tracked_vars, out
         pushfirst!(second_pass.args, :( $(Symbol("###seed###", a)) = ProbabilityModels.PaddedMatrices.RESERVED_INCREMENT_SEED_RESERVED($(Symbol("###seed###", out)), $∂, $(Symbol("###seed###", a)))))
         # pushfirst!(second_pass.args, :( $(Symbol("###seed###", a)) = $(Symbol("###seed###", out)) * $∂ ))
     end
-    push!(first_pass.args, :($function_output = $(mod).$(Symbol(:∂, f))($(A...), Val{$track_tup}())))
-    track_out && push!(tracked_vars, out)
+    if track_out
+        push!(tracked_vars, out)
+        push!(first_pass.args, :($function_output = $(mod).$(Symbol(:∂, f))($(A...), Val{$track_tup}())))
+    end
     nothing
 end
 # """
@@ -332,7 +334,8 @@ function gamma_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_�
                 ∂yassignment = :(=)
                 ∂ystorage = :(∂yᵢ)
                 push!(pre_quote.args, :(∂y = PaddedMatrices.MutableFixedSizePaddedVector{$M,$T}(undef)))
-                push!(return_expr.args, :(PaddedMatrices.ConstantFixedSizePaddedVector(∂y)'))
+                push!(return_expr.args, :(∂y'))
+                # push!(return_expr.args, :(PaddedMatrices.ConstantFixedSizePaddedVector(∂y)'))
             else
                 ∂ystorage = :∂y
                 push!(return_expr.args, :(∂y))
@@ -483,7 +486,8 @@ end
             y::PaddedMatrices.AbstractFixedSizePaddedVector{M,T},
             α::Union{T,<:PaddedMatrices.AbstractFixedSizePaddedVector{M,T}},
             β::Union{T,<:PaddedMatrices.AbstractFixedSizePaddedVector{M,T}},
-            ::Val{track}) where {track,T,M}
+            ::Val{track}) where {track,M,T}
+            # ::Val{track}) where {track,T,M}
     αisvec = isa(α, PaddedMatrices.AbstractFixedSizePaddedVector)
     βisvec = isa(β, PaddedMatrices.AbstractFixedSizePaddedVector)
     gamma_quote(M, T, true, αisvec, βisvec, track, true)
