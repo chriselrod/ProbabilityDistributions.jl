@@ -536,6 +536,15 @@ function matrix_normal_ar_lkjinv_quote(M, N, T, (track_y, track_μ, track_Λ, tr
         δU = MutableFixedSizePaddedMatrix{$M,$N,$V,$M,$(M*N)}(undef)
         i = 0
     end
+    # partial || push!(initialize_block.args, quote
+    #     println("Mean:")
+    #     println(μ)
+    #     println("AR matrix:")
+    #     println(Λ.spacing.rinvOmρ²ᵗ)
+    #     println(Λ.spacing.ρᵗ .* Λ.spacing.rinvOmρ²ᵗ)
+    #     println("U:")
+    #     println(U)
+    # end)
     loop_block = quote
         mul!(δU, δ, U)
     end
@@ -595,6 +604,12 @@ function matrix_normal_ar_lkjinv_quote(M, N, T, (track_y, track_μ, track_Λ, tr
     # Here we handle the log determinants
     if track_U
         if track_Λ # track_U and track_Λ
+            # if !partial
+            #     push!(closing_block.args, :(@show Ny, $M, logdetU, $N, logdetΛ))
+            #     push!(closing_block.args, :(@show -0.5qfvsum))
+            #     push!(closing_block.args, :(@show qf))
+            #     push!(closing_block.args, :(@show  Ny * ( $M * logdetU + $N * logdetΛ)))
+            # end
             push!(closing_block.args, :(@fastmath qfscalar = Ny * ( $M * logdetU + $N * logdetΛ) - 0.5qfvsum))
         else # track_U but not Λ
             push!(closing_block.args, :(@fastmath qfscalar = Ny * $M * logdetU - 0.5qfvsum ))
@@ -615,6 +630,7 @@ function matrix_normal_ar_lkjinv_quote(M, N, T, (track_y, track_μ, track_Λ, tr
         push!(closing_block.args, :(qfscalar = - 0.5qfvsum ))
     end
     quote
+        # @show $((track_y, track_μ, track_Λ, track_U))
         $initialize_block
         Ysize = size(Y.data, 3)
         remmask = Y.mask
@@ -634,8 +650,8 @@ end
             μ::Union{<:SMatrix{M,N,T},<:AbstractFixedSizePaddedMatrix{M,N,T}},
             Λ::AbstractAutoregressiveMatrix{T,V},
             U::StructuredMatrices.AbstractUpperTriangularMatrix{N,T}, ::Val{track}
-        ) where {M,N,V,T,track}
-        # ) where {M,N,T,V,track}
+        # ) where {M,N,V,T,track}
+        ) where {M,N,T,V,track}
     matrix_normal_ar_lkjinv_quote(M,N,T,track,false)
 end
 @generated function ∂Normal(

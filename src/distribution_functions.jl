@@ -46,6 +46,7 @@ function distribution_diff_rule!(mod, first_pass, second_pass, tracked_vars, out
     if track_out
         push!(tracked_vars, out)
         push!(first_pass.args, :($function_output = $(mod).$(Symbol(:∂, f))($(A...), Val{$track_tup}())))
+        # push!(first_pass.args, :(println("function: $f: $function_output")))
     end
     nothing
 end
