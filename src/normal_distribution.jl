@@ -527,16 +527,22 @@ function matrix_normal_ar_lkjinv_quote(M, N, T, (track_y, track_μ, track_Λ, tr
     W, Wshift = VectorizationBase.pick_vector_width_shift(T)
     V = Vec{W,T}
     @assert track_y == false
+
+    δ = MutableFixedSizePaddedMatrix{M,N,V,M,(M*N)}(undef)
+    δU = MutableFixedSizePaddedMatrix{M,N,V,M,(M*N)}(undef)
     initialize_block = quote
         Λᵥ = StructuredMatrices.cache(Λ)
         Ny = length(Y)
         qf = vbroadcast(Vec{$W,$T}, zero($T))
         Yᵥ = vectorizable(Y)
-        δ  = MutableFixedSizePaddedMatrix{$M,$N,$V,$M,$(M*N)}(undef)
-        δU = MutableFixedSizePaddedMatrix{$M,$N,$V,$M,$(M*N)}(undef)
+        # δ  = MutableFixedSizePaddedMatrix{$M,$N,$V,$M,$(M*N)}(undef)
+        δ = $δ
+        # δU = MutableFixedSizePaddedMatrix{$M,$N,$V,$M,$(M*N)}(undef)
+        δU = $δU
         i = 0
     end
-    # partial || push!(initialize_block.args, quote
+    # partial ||
+    # push!(initialize_block.args, quote
     #     println("Mean:")
     #     println(μ)
     #     println("AR matrix:")
@@ -553,11 +559,18 @@ function matrix_normal_ar_lkjinv_quote(M, N, T, (track_y, track_μ, track_Λ, tr
     if partial
         # First, we look at initializations
         if track_μ
-            push!(initialize_block.args, :(∂qf∂δ = zero(PaddedMatrices.MutableFixedSizePaddedMatrix{$M,$N,Vec{$W,$T}}) ))
+            # push!(initialize_block.args, :(∂qf∂δ = zero(PaddedMatrices.MutableFixedSizePaddedMatrix{$M,$N,Vec{$W,$T}}) ))
+            ∂qf∂δ = PaddedMatrices.MutableFixedSizePaddedMatrix{M,N,Vec{W,T}}(undef)
+            push!(initialize_block.args, quote
+                ∂qf∂δ = $∂qf∂δ
+                PaddedMatrices.zero!(∂qf∂δ)
+            end)
             push!(return_expr.args, :( SIMDPirates.vsum(∂qf∂δ) ) )
         end
         if ( track_μ || track_U )
-            push!(initialize_block.args, :(Λᵥ′ΛᵥδU = PaddedMatrices.MutableFixedSizePaddedMatrix{$M,$N,Vec{$W,$T}}(undef) ))
+            # push!(initialize_block.args, :(Λᵥ′ΛᵥδU = PaddedMatrices.MutableFixedSizePaddedMatrix{$M,$N,Vec{$W,$T}}(undef) ))
+            Λᵥ′ΛᵥδU = PaddedMatrices.MutableFixedSizePaddedMatrix{M,N,Vec{W,T}}(undef)
+            push!(initialize_block.args, :(Λᵥ′ΛᵥδU = $Λᵥ′ΛᵥδU ))
         end
         if track_Λ
             push!(initialize_block.args, :(∂qf∂Λ = vbroadcast(Vec{$W,$T}, zero($T))))
@@ -566,7 +579,12 @@ function matrix_normal_ar_lkjinv_quote(M, N, T, (track_y, track_μ, track_Λ, tr
         end
         if track_U
             push!(closing_block.args, :((logdetU, ∂logdetU) = StructuredMatrices.∂logdet(U)))
-            push!(initialize_block.args, :(∂qf∂U = zero(StructuredMatrices.MutableUpperTriangularMatrix{N,Vec{$W,$T},$(StructuredMatrices.binomial2(N+1))})))
+            # push!(initialize_block.args, :(∂qf∂U = zero(StructuredMatrices.MutableUpperTriangularMatrix{$N,Vec{$W,$T},$(StructuredMatrices.binomial2(N+1))})))
+            ∂qf∂U = StructuredMatrices.MutableUpperTriangularMatrix{N,Vec{W,T},StructuredMatrices.binomial2(N+1)}(undef)
+            push!(initialize_block.args, quote
+                ∂qf∂U = $∂qf∂U
+                PaddedMatrices.zero!(∂qf∂U)
+            end)
             push!(return_expr.args, :∂out∂U)
         end
 
@@ -593,6 +611,20 @@ function matrix_normal_ar_lkjinv_quote(M, N, T, (track_y, track_μ, track_Λ, tr
             push!(loop_block.args, :(qf = SIMDPirates.vadd(StructuredMatrices.quadform(Λᵥ, δU), qf)))
         end
         track_U && push!(loop_block.args, :(StructuredMatrices.submul!(∂qf∂U, δ', Λᵥ′ΛᵥδU)))
+        # if track_U
+        #     push!(loop_block.args, quote
+        #         StructuredMatrices.submul!(∂qf∂U, δ', Λᵥ′ΛᵥδU)
+        #         if !StructuredMatrices.all_finite(∂qf∂U)
+        #             println("Not all elements of ∂qf∂U were finite!\n")
+        #             println(∂qf∂U)
+        #             println("\nArguments, δ':\n")
+        #             println(δ')
+        #             println("\nArguments, Λᵥ′ΛᵥδU:\n")
+        #             println(Λᵥ′ΛᵥδU)
+        #             throw("\nAll elements of ∂qf∂U should be finite!")
+        #         end
+        #     end)
+        # end
         track_μ && push!(loop_block.args, :(StructuredMatrices.submul!(∂qf∂δ, Λᵥ′ΛᵥδU, U')))
     else # We are not taking partials
         track_U && push!(closing_block.args, :(logdetU = logdet(U)))
@@ -635,8 +667,10 @@ function matrix_normal_ar_lkjinv_quote(M, N, T, (track_y, track_μ, track_Λ, tr
         Ysize = size(Y.data, 3)
         remmask = Y.mask
         @inbounds for ifrac ∈ 1:Ysize
-            Yblock = SIMDPirates.vload($V, Yᵥ + i)
-            PaddedMatrices.diff!(δ, μ, Yblock)
+            # Yblock = SIMDPirates.vload($V, Yᵥ + i)
+            # PaddedMatrices.diff!(δ, μ, Yblock)
+            PaddedMatrices.vload!(δ, Yᵥ + i)
+            PaddedMatrices.diff!(δ, μ, δ)
             ifrac == Ysize && PaddedMatrices.mask!(δ, remmask)
             $loop_block
         end
