@@ -330,6 +330,72 @@ end
 
 
 
+function Normal(Y::MultivariateNormalVariate{T}, Σ::CovarianceMatrix{T}, ::Val{track}) where {T, track}
+    track_Y, track_Σ = track
+    target = zero(T)
+    U = cholesky!(Σ).U
+    U⁻¹Y = U \ Y
+    @inbounds @simd for i ∈ eachindex(U⁻¹Y)
+        target += U⁻¹Y[i] * U⁻¹Y[i]
+    end
+    if track_Σ
+        return muladd(-0.5, target,  - size(Y,2) * logdet(U))
+    else
+        return -0.5target
+    end
+end
+function Normal(Y::NTuple{N,MultivariateNormalVariate{T}}, Σ::CovarianceMatrix{T}, ::Val{track}) where {N, T, track}
+    track_Y, track_Σ = track
+    U = cholesky!(Σ).U
+    target = zero(T)
+    Ny = 0
+    for n ∈ 1:N
+        Ny -= size(Y[n], 2)
+        U⁻¹Y = U \ Y[n]
+        @inbounds @simd for i ∈ eachindex(U⁻¹Y)
+            target += U⁻¹Y[i] * U⁻¹Y[i]
+        end
+    end
+    if track_Σ
+        return muladd(-0.5, target, Ny*logdet(U))
+    else
+        return -0.5target
+    end
+end
+function ∂Normal(Y::MultivariateNormalVariate{T}, Σ::CovarianceMatrix{T}, ::Val{(true,true)}) where {T}
+    cholΣ = cholesky!(Σ)
+    target = zero(T)
+    Ny = 0
+
+    Ny -= size(Y[n], 2)
+    δ = Y[n].δ
+    Σ⁻¹δ = cholΣ \ Y[n]
+    @inbounds @simd for i ∈ eachindex(Σ⁻¹δ)
+        target += δ[i] * Σ⁻¹δ[i]
+    end
+    LinearAlgebra.BLAS.syrk!('L', 'N', T(0.5), Σ⁻¹δ.data, zero(T), Σ.∂Σ)
+    
+    muladd(-0.5, target, size(Y, 2)*logdet(cholΣ.U)), Y.Σ⁻¹δ, Σ.∂Σ
+end
+function ∂Normal(Y::NTuple{N,MultivariateNormalVariate{T}}, Σ::CovarianceMatrix{T}, ::Val{(true,true)}) where {N, T}
+    
+    cholΣ = cholesky!(Σ)
+    target = zero(T)
+    Ny = 0
+    for n ∈ 1:N
+        Ny -= size(Y[n], 2)
+        δ = Y[n].δ
+        Σ⁻¹δ = cholΣ \ Y[n]
+        @inbounds @simd for i ∈ eachindex(Σ⁻¹δ)
+            target += δ[i] * Σ⁻¹δ[i]
+        end
+        LinearAlgebra.BLAS.syrk!('L', 'N', T(0.5), Σ⁻¹δ, (n == 1 ? zero(T) : one(T)), Σ.∂Σ)
+    end
+    
+    muladd(-0.5, target, Ny*logdet(cholΣ.U)), ntuple(n -> Y[n].Σ⁻¹δ, Val(N)), Σ.∂Σ
+end
+
+
 @generated function ∂Normal(y::AbstractFixedSizePaddedVector{M,T}, ::Val{track}) where {M,T,track}
     univariate_normal_quote( M, T, true, nothing, nothing, (track[1], false, false), true, true)
 end
@@ -526,10 +592,12 @@ end
 function matrix_normal_ar_lkjinv_quote(M, N, T, (track_y, track_μ, track_Λ, track_U), partial)
     W, Wshift = VectorizationBase.pick_vector_width_shift(T)
     V = Vec{W,T}
+    WT = VectorizationBase.REGISTER_SIZE
     @assert track_y == false
 
     δ = MutableFixedSizePaddedMatrix{M,N,V,M,(M*N)}(undef)
     δU = MutableFixedSizePaddedMatrix{M,N,V,M,(M*N)}(undef)
+    # buffer_size = 2M*N*WT
     initialize_block = quote
         Λᵥ = StructuredMatrices.cache(Λ)
         Ny = length(Y)

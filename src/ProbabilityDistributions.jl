@@ -1,6 +1,6 @@
 module ProbabilityDistributions
 
-using   SIMDPirates, SLEEFPirates, SpecialFunctions,
+using   SIMDPirates, SLEEFPirates, SpecialFunctions, DistributionParameters,
         PaddedMatrices, StructuredMatrices, ScatteredArrays, StaticArrays, LinearAlgebra,
         VectorizationBase, LoopVectorization
 
