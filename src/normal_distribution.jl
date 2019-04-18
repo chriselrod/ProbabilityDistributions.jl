@@ -5,7 +5,8 @@ push!(DISTRIBUTION_DIFF_RULES, :Normal)
 function univariate_normal_quote(
                 M::Int, T::DataType, yisvec::Bool,
                 μisvec::Union{Bool,Nothing}, σisvec::Union{Bool,Nothing},
-                (track_y, track_μ, track_σ)::NTuple{3,Bool}, partial::Bool, stddev::Bool)
+                (track_y, track_μ, track_σ)::NTuple{3,Bool}, partial::Bool, stddev::Bool
+            )
 
     # q = quote end
     pre_quote = quote
@@ -329,7 +330,7 @@ end
 end
 
 
-
+using DistributionParameters: MultivariateNormalVariate
 function Normal(Y::MultivariateNormalVariate{T}, Σ::CovarianceMatrix{T}, ::Val{track}) where {T, track}
     track_Y, track_Σ = track
     target = zero(T)
@@ -737,8 +738,9 @@ function matrix_normal_ar_lkjinv_quote(M, N, T, (track_y, track_μ, track_Λ, tr
         @inbounds for ifrac ∈ 1:Ysize
             # Yblock = SIMDPirates.vload($V, Yᵥ + i)
             # PaddedMatrices.diff!(δ, μ, Yblock)
-            PaddedMatrices.vload!(δ, Yᵥ + i)
-            PaddedMatrices.diff!(δ, μ, δ)
+            # PaddedMatrices.vload!(δ, Yᵥ + i)
+            Yᵢ = PaddedMatrices.vload($V, Yᵥ + i)
+            PaddedMatrices.diff!(δ, μ, Yᵢ)
             ifrac == Ysize && PaddedMatrices.mask!(δ, remmask)
             $loop_block
         end
