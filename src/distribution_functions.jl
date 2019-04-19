@@ -173,10 +173,12 @@ end
             push!(init_q.args, :(∂αP = zero($T)))
             push!(partial_exprs, :(∂αP += y[i] ? ∂logP : ∂logOmP))
         end
+        W, Wshift = VectorizationBase.pick_vector_width_shift(T)
+        unroll_factor = max(8 >> Wshift, 1)
         q = quote
             # $(Expr(:meta, :inline))
             $init_q
-            @vectorize $T for i ∈ eachindex(y)
+            @vectorize $T $unroll_factor for i ∈ eachindex(y)
                 # a = $(Expr(:call, :+, :α, [:(X[i,$n] * β[$n]) for n ∈ 1:N_β]...))
                 a = SIMDPirates.vmuladd(X[i,1], β[1], α)
                 $([:(a = SIMDPirates.vmuladd(X[i,$n], β[$n], a)) for n ∈ 2:N_β]...)
