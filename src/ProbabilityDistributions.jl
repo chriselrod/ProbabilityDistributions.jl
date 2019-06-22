@@ -4,10 +4,11 @@ using   SIMDPirates, SLEEFPirates, SpecialFunctions, DistributionParameters,
         PaddedMatrices, StructuredMatrices, ScatteredArrays, StaticArrays, LinearAlgebra,
         VectorizationBase, LoopVectorization
 
-using PaddedMatrices: AbstractFixedSizePaddedVector, AbstractFixedSizePaddedMatrix
+using PaddedMatrices: StackPointer, @support_stack_pointer,
+    AbstractFixedSizePaddedVector, AbstractFixedSizePaddedMatrix, AbstractPaddedMatrix
 using ScatteredArrays: AbstractScatteredArray
 using StructuredMatrices: AbstractAutoregressiveMatrix
-using DistributionParameters: LKJ_Correlation_Cholesky
+using DistributionParameters: LKJCorrCholesky
 
 function return_expression(return_expr)
     length(return_expr.args) == 1 ? return_expr.args[1] : return_expr

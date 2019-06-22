@@ -215,17 +215,7 @@ function ∂Bernoulli_logit_fnmsub_quote()
 end
 
 
-# @generated function LKJ(L::LKJ_Correlation_Cholesky{N,T}, η::T, ::Val{track}) where {N,T,track}
-#     quote
-#         out = zero($T)
-#         @vectorize $T for n ∈ 1:$(N-1)
-#             out += ($(N - 3) - n + 2η) * log(L[n+1])
-#         end
-#         out
-#     end
-# end
-
-@generated function LKJ(L::LKJ_Correlation_Cholesky{N,T}, η::T, ::Val{track}) where {N,T,track}
+@generated function LKJ(L::LKJCorrCholesky{N,T}, η::T, ::Val{track}) where {N,T,track}
     quote
         out = zero($T)
         # @fastmath @inbounds @simd ivdep for n ∈ 1:$(N-1)
@@ -235,7 +225,7 @@ end
         out
     end
 end
-@generated function ∂LKJ(L::LKJ_Correlation_Cholesky{N,T}, η::T, ::Val{track}) where {N,T,track}
+@generated function ∂LKJ(L::LKJCorrCholesky{N,T}, η::T, ::Val{track}) where {N,T,track}
     track_L, track_η = track
     if track_L && track_η
         quote
@@ -294,8 +284,67 @@ end
         end
     end
 end
+@generated function ∂LKJ(sp::PaddedMatrices.StackPointer, L::LKJCorrCholesky{N,T}, η::T, ::Val{track}) where {N,T,track}
+    track_L, track_η = track
+    if track_L && track_η
+        quote
+            out = zero($T)
+            (sp,∂L) = PtrVector{$N,$T}(sp)
+            @inbounds ∂L[1] = 0
+            ∂η = zero($T)
+            @vectorize $T for n ∈ 1:$(N-1)
+            # @fastmath @inbounds @simd ivdep for n ∈ 1:$(N-1)
+                ∂ηₙ = log(L[n+1])
+                coef = ($(N - 3) - n + 2η)
+                out += coef * ∂ηₙ
+                ∂L[n+1] = coef / L[n+1]
+                ∂η += 2∂ηₙ
+            end
+            sp, (out, Diagonal(∂L), ∂η)
+        end
+    elseif track_L
+        quote
+            out = zero($T)
+            (sp, ∂L) = PtrVector{$N,$T}(sp)
+            @inbounds ∂L[1] = 0
+            ∂η = zero($T)
+            @vectorize $T for n ∈ 1:$(N-1)
+            # @fastmath @inbounds @simd ivdep for n ∈ 1:$(N-1)
+                ∂ηₙ = log(L[n+1])
+                coef = ($(N - 3) - n + 2η)
+                out += coef * ∂ηₙ
+                ∂L[n+1] = coef / L[n+1]
+            end
+            sp, (out, Diagonal(∂L))
+        end
+    elseif track_η
+        quote
+            out = zero($T)
+            ∂η = zero($T)
+            @vectorize $T for n ∈ 1:$(N-1)
+            # @fastmath @inbounds @simd ivdep for n ∈ 1:$(N-1)
+                ∂ηₙ = log(L[n+1])
+                coef = ($(N - 3) - n + 2η)
+                out += coef * ∂ηₙ
+                ∂η += 2∂ηₙ
+            end
+            out, ∂η
+        end
+    else
+        quote
+            out = zero($T)
+            @vectorize $T for n ∈ 1:$(N-1)
+            # @fastmath @inbounds @simd ivdep for n ∈ 1:$(N-1)
+                ∂ηₙ = log(L[n+1])
+                coef = ($(N - 3) - n + 2η)
+                out += coef * ∂ηₙ
+            end
+            out
+        end
+    end
+end
 push!(DISTRIBUTION_DIFF_RULES, :LKJ)
-
+PaddedMatrices.@support_stack_pointer ∂LKJ
 
 function gamma_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_β), partial)
     q = quote end

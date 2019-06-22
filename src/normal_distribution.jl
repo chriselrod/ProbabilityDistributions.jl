@@ -330,22 +330,186 @@ end
 end
 
 
-using DistributionParameters: MultivariateNormalVariate
-function Normal(Y::MultivariateNormalVariate{T}, Σ::CovarianceMatrix{T}, ::Val{track}) where {T, track}
+using DistributionParameters: MultivariateNormalVariate, DynamicCovarianceMatrix
+function logdet_triangle(A::AbstractMatrix{T}) where {T}
+    N = size(A,1)
+    W, Wshift = VectorizationBase.pick_vector_width_shift(T)
+    Nrep = N >> Wshift
+
+    vout = SIMDPirates.vbroadcast(Vec{W,T}, zero(T))
+    @inbounds for i ∈ 0:Nrep-1
+        x = ntuple(w -> Core.VecElement(A[W*i+w,W*i+w]), Val(W))
+        vout = SIMDPirates.vadd(
+            vout,
+            SLEEFPirates.log( x )
+        )
+    end
+#    rem = N & (W-1)
+ #   log
+    out = SIMDPirates.vsum(vout)
+    @inbounds for i ∈ 1 + (N & -W):N
+        out += log(A[i,i])
+    end
+    out
+end
+
+
+@generated function Normal!(
+    δ::AbstractMatrix{T},
+    Y::NTuple{K},
+    μ::NTuple{K,V},
+    Σ::DynamicCovarianceMatrix{T},
+    ::Val{track}
+) where {T, K, P, V <: PaddedMatrices.AbstractFixedSizePaddedVector{P,T}, track}
+    W, Wshift = VectorizationBase.pick_vector_width_shift(P, T)
+    track_Y, track_μ, track_Σ = track
+#    reps, rem = divrem(P, W)
+#    if rem == 0 && reps < VectorizationBase.REGISTER_COUNT - 1
+#        fill_δ = quote end
+    quote
+        coffset = 0
+        for k ∈ 1:$K
+            Yₖ = Y[k]
+            μₖ = μ[k]
+            ncol = size(Yₖ, 2)
+            # Could avoid reloading μₖ
+            # but performance difference seemed negligible in benchmarks
+            # so, I figured I'd go for smaller code size.
+            for c ∈ 1:ncol
+                @vectorize $T for p ∈ 1:$P
+                    δ[p,c+coffset] = μₖ[p] - Yₖ[p,c]
+                end
+            end
+            coffset += ncol
+        end
+        L = Σ.data
+        LinearAlgebra.LAPACK.potrf!('L', L)
+        LinearAlgebra.LAPACK.trtrs!('L', 'N', 'N', L, δ)
+        target = zero($T)
+        @inbounds @simd for i ∈ 1:length(δ)
+            target = muladd(δ[i],δ[i],target)
+        end
+        $(track_Σ ? :(muladd($(T(-0.5)), target, -coffset*logdet_triangle(L))) : :($(T(0.5)) * target))        
+    end
+end
+function Normal(sp::StackPointer, Y::NTuple{K}, μ::NTuple{K}, Σ::DynamicCovarianceMatrix{T}, ::Val{track}) where {K, T, track}
+    cols = 0
+    @inbounds for k ∈ 1:K
+        cols += size(Y[k], 2)
+    end
+    rows = @inbounds length(μ[1])
+    δ = DynamicPtrMatrix(pointer(sp, T), (rows, cols), rows)
+    # return sp, to reuse memory
+    sp, Normal!(δ, Y, μ, Σ, Val{track}())
+end
+@generated function ∂Normal!(
+#    ∂μ::Union{Nothing,NTuple{K,V}},
+    ∂Σ::Union{Nothing,AbstractMatrix{T}},
+    Σ⁻¹δ::AbstractMatrix{T},
+    δ::AbstractMatrix{T},
+    Y::NTuple{K},
+    μ::NTuple{K,V},
+    Σ::DynamicCovarianceMatrix{T},
+    ::Val{track_μ}
+) where {T, K, P, V <: PaddedMatrices.AbstractFixedSizePaddedVector{P,T}, track_μ}
+    W, Wshift = VectorizationBase.pick_vector_width_shift(P, T)
+#    track_μ = ∂μ != Nothing
+    track_Σ = ∂Σ != Nothing
+#    track_Y, track_μ, track_Σ = track
+#    @assert track_Y == false
+    if !(track_μ | track_Σ)
+        ret = :target
+    else
+        ret = Expr(:tuple, :target)
+    end
+    track_μ && push!(ret.args, :∂μ)
+    track_Σ && push!(ret.args, :∂Σ)
+    q = quote
+        coffset = 0
+        for k ∈ 1:$K
+            Yₖ = Y[k]
+            μₖ = μ[k]
+            ncol = size(Yₖ, 2)
+            # Could avoid reloading μₖ
+            # but performance difference seemed negligible in benchmarks
+            # so, I figured I'd go for smaller code size.
+            for c ∈ 1:ncol
+                @vectorize $T for p ∈ 1:$P
+                    δₚ = μₖ[p] - Yₖ[p,c]
+                    δ[p,c+coffset] = δₚ
+                    Σ⁻¹δ[p,c+coffset] = δₚ
+                end
+            end
+            coffset += ncol
+        end
+        L = Σ.data
+        LinearAlgebra.LAPACK.potrf!('L', Σ)
+        $(track_Σ ? :( logdetL = logdet_triangle(L); ) : nothing)
+        LinearAlgebra.LAPACK.potrs!('L', L, Σ⁻¹δ)
+        target = zero($T)
+        @inbounds @simd ivdep for i ∈ 1:length(δ)
+            target = muladd(Σ⁻¹δ[i],δ[i],target)
+        end
+    end
+    if track_μ
+        ∂μq = Expr(:tuple,)
+        push!(q.args, coffset = 0)
+        for k ∈ 1:K
+            ∂μₖ = Symbol(:∂μ_, k)
+            push!(∂μq.args, ∂μₖ)
+            push!(q.args, :(ncol = size(Y[k],2); $∂μₖ = view( Σ⁻¹δ, :, coffset+1:coffset+ncol ); coffset += ncol))
+        end
+        push!(q.args, :(∂μ = $∂μq))
+    end
+    if track_Σ
+        push!(q.args, quote
+              LinearAlgebra.BLAS.syrk!('L', 'N', $(T(0.5)), Σ⁻¹δ, zero($T), ∂Σ)
+              target = muladd($(T(-0.5)), target, -coffset*logdetL)
+              end)
+    else
+        push!(q.args, :(target *= $(T(0.5))))
+    end
+    push!(q.args, ret)
+    q
+end
+@generated function ∂Normal(sp::StackPointer, Y::NTuple{K}, μ::NTuple{K}, Σ::DynamicCovarianceMatrix{T}, ::Val{track}) where {K, T, track}
+    track_Y, track_μ, track_Σ = track
+    @assert !track_Y
+    q = quote
+        cols = 0
+        @inbounds for k ∈ 1:K
+            cols += size(Y[k], 2)
+        end
+        rows = @inbounds length(μ[1])
+    end
+    if track_Σ
+        push!(q.args, :((sp, ∂Σ) = DynamicPtrMatrix{$T}(sp, (rows,rows), rows)))
+    else
+        push!(q.args, :(∂Σ = nothing))
+    end
+    push!(q.args, :((sp, Σ⁻¹δ) = DynamicPtrMatrix{$T}(sp, (rows,cols), rows)))
+    push!(q.args, :(δ = DynamicPtrMatrix(pointer(sp, $T), (rows, cols), rows)))
+    push!(q.args, :(sp, ∂Normal!(∂Σ, Σ⁻¹δ, δ, Y, μ, Σ, Val{$track_μ}()) ))
+    q
+end
+
+
+
+function Normal(δ::AbstractPaddedMatrix{T}, Y::NTuple{K}, μ::NTuple{K}, Σ::DynamicCovarianceMatrix{T}, ::Val{track}) where {T, K, track}
     track_Y, track_Σ = track
     target = zero(T)
     U = cholesky!(Σ).U
     U⁻¹Y = U \ Y
     @inbounds @simd for i ∈ eachindex(U⁻¹Y)
         target += U⁻¹Y[i] * U⁻¹Y[i]
-    end
+        end
     if track_Σ
         return muladd(-0.5, target,  - size(Y,2) * logdet(U))
     else
         return -0.5target
     end
 end
-function Normal(Y::NTuple{N,MultivariateNormalVariate{T}}, Σ::CovarianceMatrix{T}, ::Val{track}) where {N, T, track}
+function Normal(Y::NTuple{N,MultivariateNormalVariate{T}}, Σ::DynamicCovarianceMatrix{T}, ::Val{track}) where {N, T, track}
     track_Y, track_Σ = track
     U = cholesky!(Σ).U
     target = zero(T)
@@ -358,27 +522,30 @@ function Normal(Y::NTuple{N,MultivariateNormalVariate{T}}, Σ::CovarianceMatrix{
         end
     end
     if track_Σ
-        return muladd(-0.5, target, Ny*logdet(U))
+        return muladd(-0.5, target, Ny*logdet_triangle(U))
     else
         return -0.5target
     end
 end
-function ∂Normal(Y::MultivariateNormalVariate{T}, Σ::CovarianceMatrix{T}, ::Val{(true,true)}) where {T}
+
+
+
+function ∂Normal(Y::MultivariateNormalVariate{T}, Σ::DynamicCovarianceMatrix{T}, ::Val{(true,true)}) where {T}
     cholΣ = cholesky!(Σ)
     target = zero(T)
     Ny = 0
 
-    Ny -= size(Y[n], 2)
-    δ = Y[n].δ
-    Σ⁻¹δ = cholΣ \ Y[n]
-    @inbounds @simd for i ∈ eachindex(Σ⁻¹δ)
+    Ny -= size(Y, 2)
+    δ = Y.δ
+    Σ⁻¹δ = cholΣ \ Y
+    @fastmath @inbounds @simd ivdep for i ∈ eachindex(Σ⁻¹δ)
         target += δ[i] * Σ⁻¹δ[i]
     end
     LinearAlgebra.BLAS.syrk!('L', 'N', T(0.5), Σ⁻¹δ.data, zero(T), Σ.∂Σ)
     
-    muladd(-0.5, target, size(Y, 2)*logdet(cholΣ.U)), Y.Σ⁻¹δ, Σ.∂Σ
+    muladd(-0.5, target, -size(Y, 2)*logdet_triangle(cholΣ)), Y.Σ⁻¹δ, Σ.∂Σ
 end
-function ∂Normal(Y::NTuple{N,MultivariateNormalVariate{T}}, Σ::CovarianceMatrix{T}, ::Val{(true,true)}) where {N, T}
+function ∂Normal(Y::NTuple{N,MultivariateNormalVariate{T}}, Σ::DynamicCovarianceMatrix{T}, ::Val{(true,true)}) where {N, T}
     
     cholΣ = cholesky!(Σ)
     target = zero(T)
@@ -387,13 +554,13 @@ function ∂Normal(Y::NTuple{N,MultivariateNormalVariate{T}}, Σ::CovarianceMatr
         Ny -= size(Y[n], 2)
         δ = Y[n].δ
         Σ⁻¹δ = cholΣ \ Y[n]
-        @inbounds @simd for i ∈ eachindex(Σ⁻¹δ)
+        @fastmath @inbounds @simd ivdep for i ∈ eachindex(Σ⁻¹δ)
             target += δ[i] * Σ⁻¹δ[i]
         end
         LinearAlgebra.BLAS.syrk!('L', 'N', T(0.5), Σ⁻¹δ, (n == 1 ? zero(T) : one(T)), Σ.∂Σ)
     end
     
-    muladd(-0.5, target, Ny*logdet(cholΣ.U)), ntuple(n -> Y[n].Σ⁻¹δ, Val(N)), Σ.∂Σ
+    muladd(-0.5, target, Ny*logdet_triangle(cholΣ)), ntuple(n -> Y[n].Σ⁻¹δ, Val(N)), Σ.∂Σ
 end
 
 
@@ -578,7 +745,7 @@ end
             Y::AbstractScatteredArray{T,2,<: Union{SMatrix{M,N,T},AbstractFixedSizePaddedMatrix{M,N,T}},1,2},
             μ::Union{<:SMatrix{M,N,T},<:AbstractFixedSizePaddedMatrix{M,N,T}},
             Λ::AbstractAutoregressiveMatrix{T,V},
-            L::LKJ_Correlation_Cholesky{N,T}, ::Val{track}
+            L::LKJCorrCholesky{N,T}, ::Val{track}
         ) where {M,N,T,V,track}
     matrix_normal_ar_lkj_quote(M,N,T,track,false)
 end
@@ -586,7 +753,7 @@ end
             Y::AbstractScatteredArray{T,2,<: Union{SMatrix{M,N,T},AbstractFixedSizePaddedMatrix{M,N,T}},1,2},
             μ::Union{<:SMatrix{M,N,T},<:AbstractFixedSizePaddedMatrix{M,N,T}},
             Λ::AbstractAutoregressiveMatrix{T,V},
-            L::LKJ_Correlation_Cholesky{N,T}, ::Val{track}
+            L::LKJCorrCholesky{N,T}, ::Val{track}
         ) where {M,N,T,V,track}
     matrix_normal_ar_lkj_quote(M,N,T,track,true)
 end
@@ -767,3 +934,8 @@ end
         ) where {M,N,T,V,track}
     matrix_normal_ar_lkjinv_quote(M,N,T,track,true)
 end
+
+
+@support_stack_pointer Normal
+@support_stack_pointer ∂Normal
+
