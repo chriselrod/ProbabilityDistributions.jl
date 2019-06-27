@@ -46,8 +46,10 @@ function distribution_diff_rule!(mod, first_pass, second_pass, tracked_vars, out
     if track_out
         push!(tracked_vars, out)
         push!(first_pass.args, :($function_output = $(mod).$(Symbol(:∂, f))($(A...), Val{$track_tup}())))
-        # ret_string  = "function: $f: "
-        # push!(first_pass.args, :(println($ret_string, $function_output)))
+#        printstring = "distribution $f (ret: $out): "
+#        push!(first_pass.args, :(println($printstring, $out)))
+##        ret_string  = "function: $f: (ret"
+##        push!(first_pass.args, :(println($ret_string, $function_output)))
     end
     nothing
 end
@@ -95,17 +97,18 @@ push!(FMADD_DISTRIBUTIONS, :Bernoulli_logit)
         q = quote
             # $(Expr(:meta, :inline))
             # T = promote_type(eltype(α),eltype(β),eltype(X))
-            target = zero($T)
+#            target = zero($T)
+            target = vbroadcast(Vec{$(VectorizationBase.pick_vector_width(T)),$T}, zero($T))
             @vectorize $T for i ∈ eachindex(y)
                 # a = $(Expr(:call, :+, :α, [:(X[i,$n] * β[$n]) for n ∈ 1:N_β]...))
                 # Break it up, so inference still works for N_β > 15
-                a = SIMDPirates.vmuladd(X[i,1], β[1], α)
-                $([:(a = SIMDPirates.vmuladd(X[i,$n], β[$n], a)) for n ∈ 2:N_β]...)
+                a = vmuladd(X[i,1], β[1], α)
+                $([:(a = vmuladd(X[i,$n], β[$n], a)) for n ∈ 2:N_β]...)
                 OmP = one($T) / (one($T) + SLEEFPirates.exp( a ))
                 # P = one($T) - OmP
                 logOmP = log(OmP)
                 logP = a + logOmP
-                target += y[i] ? logP : logOmP
+                target = vadd(target, y[i] ? logP : logOmP)
             end
             target
         end
@@ -129,7 +132,8 @@ end
         N_β = PaddedMatrices.type_length(β)
         init_q = quote
             # T = promote_type(eltype(α),eltype(β),eltype(X))
-            target = zero($T)
+#            target = zero($T)
+            target = vbroadcast(Vec{$(VectorizationBase.pick_vector_width(T)),$T}, zero($T))
         end
         out_expr = Expr(:tuple, :target)
         partial_exprs = Expr[]
@@ -180,13 +184,13 @@ end
             $init_q
             @vectorize $T $unroll_factor for i ∈ eachindex(y)
                 # a = $(Expr(:call, :+, :α, [:(X[i,$n] * β[$n]) for n ∈ 1:N_β]...))
-                a = SIMDPirates.vmuladd(X[i,1], β[1], α)
-                $([:(a = SIMDPirates.vmuladd(X[i,$n], β[$n], a)) for n ∈ 2:N_β]...)
+                a = vmuladd(X[i,1], β[1], α)
+                $([:(a = vmuladd(X[i,$n], β[$n], a)) for n ∈ 2:N_β]...)
                 OmP = one($T) / (one($T) + SLEEFPirates.exp( a ))
                 P = one($T) - OmP
                 logOmP = SLEEFPirates.log(OmP)
                 logP = a + logOmP
-                target += y[i] ? logP : logOmP
+                target = vadd(target, y[i] ? logP : logOmP)
                 $(partial_exprs...)
             end
             $out_expr
@@ -215,21 +219,24 @@ function ∂Bernoulli_logit_fnmsub_quote()
 end
 
 
-@generated function LKJ(L::LKJCorrCholesky{N,T}, η::T, ::Val{track}) where {N,T,track}
+@generated function LKJ(L::AbstractLKJCorrCholesky{N,T}, η::T, ::Val{track}) where {N,T,track}
     quote
-        out = zero($T)
+        #out = zero($T)
+        target = vbroadcast(SVec{$(VectorizationBase.pick_vector_width(N-1,T)),$T}, zero($T))
+
         # @fastmath @inbounds @simd ivdep for n ∈ 1:$(N-1)
         @vectorize $T for n ∈ 1:$(N-1)
-            out += ($(N - 3) - n + 2η) * SLEEFPirates.log(L[n+1])
+            target = vmuladd( ($(N - 3) - n + 2η), SLEEFPirates.log(L[n+1]), target)
         end
-        out
+        extract_data(target)
     end
 end
-@generated function ∂LKJ(L::LKJCorrCholesky{N,T}, η::T, ::Val{track}) where {N,T,track}
+@generated function ∂LKJ(L::AbstractLKJCorrCholesky{N,T}, η::T, ::Val{track}) where {N,T,track}
     track_L, track_η = track
     if track_L && track_η
         quote
-            out = zero($T)
+#            out = zero($T)
+            target = vbroadcast(SVec{$(VectorizationBase.pick_vector_width(N-1,T)),$T}, zero($T))
             ∂L = MutableFixedSizePaddedVector{$N,$T}(undef)
             @inbounds ∂L[1] = 0
             ∂η = zero($T)
@@ -237,15 +244,16 @@ end
             # @fastmath @inbounds @simd ivdep for n ∈ 1:$(N-1)
                 ∂ηₙ = log(L[n+1])
                 coef = ($(N - 3) - n + 2η)
-                out += coef * ∂ηₙ
+                target = vmuladd( coef, ∂ηₙ, target )
                 ∂L[n+1] = coef / L[n+1]
                 ∂η += 2∂ηₙ
             end
-            out, Diagonal(ConstantFixedSizePaddedVector(∂L)), ∂η
+            extract_data(target), Diagonal(ConstantFixedSizePaddedVector(∂L)), ∂η
         end
     elseif track_L
         quote
-            out = zero($T)
+            target = vbroadcast(SVec{$(VectorizationBase.pick_vector_width(N-1,T)),$T}, zero($T))
+#            out = zero($T)
             ∂L = MutableFixedSizePaddedVector{$N,$T}(undef)
             @inbounds ∂L[1] = 0
             ∂η = zero($T)
@@ -253,42 +261,49 @@ end
             # @fastmath @inbounds @simd ivdep for n ∈ 1:$(N-1)
                 ∂ηₙ = log(L[n+1])
                 coef = ($(N - 3) - n + 2η)
-                out += coef * ∂ηₙ
+                target = vmuladd(coef, ∂ηₙ, target)
                 ∂L[n+1] = coef / L[n+1]
             end
-            out, Diagonal(ConstantFixedSizePaddedVector(∂L))
+            extract_data(target), Diagonal(ConstantFixedSizePaddedVector(∂L))
         end
     elseif track_η
         quote
-            out = zero($T)
+#            out = zero($T)
+            target = vbroadcast(SVec{$(VectorizationBase.pick_vector_width(N-1,T)),$T}, zero($T))
             ∂η = zero($T)
             @vectorize $T for n ∈ 1:$(N-1)
             # @fastmath @inbounds @simd ivdep for n ∈ 1:$(N-1)
                 ∂ηₙ = log(L[n+1])
                 coef = ($(N - 3) - n + 2η)
-                out += coef * ∂ηₙ
+                target = vmuladd( coef, ∂ηₙ, target )
                 ∂η += 2∂ηₙ
             end
-            out, ∂η
+            extract_data(target), ∂η
         end
     else
         quote
-            out = zero($T)
+            target = vbroadcast(SVec{$(VectorizationBase.pick_vector_width(N-1,T)),$T}, zero($T))
+#            out = zero($T)
             @vectorize $T for n ∈ 1:$(N-1)
             # @fastmath @inbounds @simd ivdep for n ∈ 1:$(N-1)
                 ∂ηₙ = log(L[n+1])
                 coef = ($(N - 3) - n + 2η)
-                out += coef * ∂ηₙ
+                target = vmuladd( coef, ∂ηₙ, target)
             end
-            out
+            extract_data(target)
         end
     end
 end
-@generated function ∂LKJ(sp::PaddedMatrices.StackPointer, L::LKJCorrCholesky{N,T}, η::T, ::Val{track}) where {N,T,track}
+@generated function ∂LKJ(sp::PaddedMatrices.StackPointer, L::AbstractLKJCorrCholesky{N,T}, η::T, ::Val{track}) where {N,T,track}
     track_L, track_η = track
     if track_L && track_η
         quote
-            out = zero($T)
+            # Inlined because of:
+            # https://github.com/JuliaLang/julia/issues/32414
+            # Stop forcing inlining when the issue is fixed.
+            $(Expr(:meta,:inline))
+            target = vbroadcast(SVec{$(VectorizationBase.pick_vector_width(N-1,T)),$T}, zero($T))
+#            out = zero($T)
             (sp,∂L) = PtrVector{$N,$T}(sp)
             @inbounds ∂L[1] = 0
             ∂η = zero($T)
@@ -296,60 +311,79 @@ end
             # @fastmath @inbounds @simd ivdep for n ∈ 1:$(N-1)
                 ∂ηₙ = log(L[n+1])
                 coef = ($(N - 3) - n + 2η)
-                out += coef * ∂ηₙ
+                target = vmuladd( coef, ∂ηₙ, target )
                 ∂L[n+1] = coef / L[n+1]
                 ∂η += 2∂ηₙ
             end
-            sp, (out, Diagonal(∂L), ∂η)
+            sp, (extract_data(target), Diagonal(∂L), ∂η)
         end
     elseif track_L
         quote
-            out = zero($T)
+            # Inlined because of:
+            # https://github.com/JuliaLang/julia/issues/32414
+            # Stop forcing inlining when the issue is fixed.
+            $(Expr(:meta,:inline))
+            target = vbroadcast(SVec{$(VectorizationBase.pick_vector_width(N-1,T)),$T}, zero($T))
+            #            out = zero($T)
+#            i_init = reinterpret(Int, pointer(sp))
             (sp, ∂L) = PtrVector{$N,$T}(sp)
+#            i_final = reinterpret(Int, pointer(sp))
+#            @show i_final - i_init, $N, typeof(∂L)
             @inbounds ∂L[1] = 0
             ∂η = zero($T)
             @vectorize $T for n ∈ 1:$(N-1)
             # @fastmath @inbounds @simd ivdep for n ∈ 1:$(N-1)
                 ∂ηₙ = log(L[n+1])
                 coef = ($(N - 3) - n + 2η)
-                out += coef * ∂ηₙ
+                target = vmuladd(coef, ∂ηₙ, target)
                 ∂L[n+1] = coef / L[n+1]
             end
-            sp, (out, Diagonal(∂L))
+#            println("\nReturning stack pointer:")
+#            @show pointer(sp)
+            sp, (extract_data(target), Diagonal(∂L))
         end
     elseif track_η
         quote
-            out = zero($T)
+            # Inlined because of:
+            # https://github.com/JuliaLang/julia/issues/32414
+            # Stop forcing inlining when the issue is fixed.
+            $(Expr(:meta,:inline))
+            target = vbroadcast(SVec{$(VectorizationBase.pick_vector_width(N-1,T)),$T}, zero($T))
+#            out = zero($T)
             ∂η = zero($T)
             @vectorize $T for n ∈ 1:$(N-1)
             # @fastmath @inbounds @simd ivdep for n ∈ 1:$(N-1)
                 ∂ηₙ = log(L[n+1])
                 coef = ($(N - 3) - n + 2η)
-                out += coef * ∂ηₙ
+                target = vmuladd(coef, ∂ηₙ, target)
                 ∂η += 2∂ηₙ
             end
-            out, ∂η
+            sp, (extract_data(target), ∂η)
         end
     else
         quote
-            out = zero($T)
+            # Inlined because of:
+            # https://github.com/JuliaLang/julia/issues/32414
+            # Stop forcing inlining when the issue is fixed.
+            $(Expr(:meta,:inline))
+            target = vbroadcast(SVec{$(VectorizationBase.pick_vector_width(N-1,T)),$T}, zero($T))
+#            out = zero($T)
             @vectorize $T for n ∈ 1:$(N-1)
             # @fastmath @inbounds @simd ivdep for n ∈ 1:$(N-1)
                 ∂ηₙ = log(L[n+1])
                 coef = ($(N - 3) - n + 2η)
-                out += coef * ∂ηₙ
+                target = vmuladd(coef, ∂ηₙ, target)
             end
-            out
+            sp, extract_data(target)
         end
     end
 end
 push!(DISTRIBUTION_DIFF_RULES, :LKJ)
-PaddedMatrices.@support_stack_pointer ∂LKJ
 
 function gamma_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_β), partial)
     q = quote end
     pre_quote = quote end
-    return_expr = Expr(:tuple, :out)
+    return_expr = Expr(:tuple, :(extract_data(target)))
     loop = any((yisvec, αisvec, βisvec))
     # set initialized to loop; if we are looping, we'll start out at zero
     initialized = loop
@@ -438,9 +472,9 @@ function gamma_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_�
     if track_α || track_β
         push!(q.args, :( lβ = $logβexpr))
         if initialized
-            push!(q.args, :( out += $αexpr * lβ ) )
+            push!(q.args, :( target = vmuladd($αexpr, lβ, target) ) )
         else
-            push!(q.args, :( out = $αexpr * lβ) )
+            push!(q.args, :( target = $αexpr * lβ) )
             initialized = true
         end
         if partial
@@ -451,9 +485,9 @@ function gamma_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_�
     if track_α || track_y
         push!(q.args, :(ly = $logyexpr))
         if initialized
-            push!(q.args, :( out += $αm1expr * ly ) )
+            push!(q.args, :( target = vmuladd($αm1expr, ly, target) ) )
         else
-            push!(q.args, :( out = $αm1expr * ly ) )
+            push!(q.args, :( target = $αm1expr * ly ) )
             initialized = true
         end
         if partial
@@ -469,7 +503,7 @@ function gamma_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_�
     end
     if track_β || track_y
         # initialized == true
-        push!(q.args, :(out -= $βexpr*$yexpr))
+        push!(q.args, :(target = vfnmadd($βexpr, $yexpr, target)))
         if partial
             if track_β
                 if βisvec
@@ -489,7 +523,7 @@ function gamma_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_�
     end
     if track_α
         # initialized == true, because (if track_α || track_β) == true
-        push!(q.args, :(out -= $lgammaαexpr))
+        push!(q.args, :(target = vsub(target, $lgammaαexpr)))
 
         if partial
             if αisvec
@@ -499,13 +533,17 @@ function gamma_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_�
             end
         end
     end
+#    println("\n\n\n\n\n\n\n\n\n\n")
+#    println(q)
+#    println("\n\n\n\n\n\n\n\n\n\n")
     if loop
         quote
             $(Expr(:meta,:inline))
             @fastmath begin
                 $pre_quote
             end
-            out = zero($T)
+            target = vbroadcast(SVec{$(VectorizationBase.pick_vector_width(T)),$T}, zero($T))
+#            out = zero($T)
             @vectorize $T for i ∈ 1:$M
                 $q
             end
@@ -527,10 +565,12 @@ end
 
 # α * log(β) + (α-1) * log(y) - β*y - lgamma(α)
 @generated function Gamma(
-            y::PaddedMatrices.AbstractFixedSizePaddedVector{M,T},
-            α::Union{T, <: PaddedMatrices.AbstractFixedSizePaddedVector{M,T}},
-            β::Union{T, <: PaddedMatrices.AbstractFixedSizePaddedVector{M,T}},
-            ::Val{track}) where {track,T,M}
+    y::PaddedMatrices.AbstractFixedSizePaddedVector{M,T},
+    α::Union{T, <: PaddedMatrices.AbstractFixedSizePaddedVector{M,T}},
+    β::Union{T, <: PaddedMatrices.AbstractFixedSizePaddedVector{M,T}},
+    ::Val{track}
+) where {track,M,T}
+#) where {track,T,M}
     αisvec = isa(α, PaddedMatrices.AbstractFixedSizePaddedVector)
     βisvec = isa(β, PaddedMatrices.AbstractFixedSizePaddedVector)
     gamma_quote(M, T, true, αisvec, βisvec, track, false)
@@ -563,7 +603,7 @@ push!(DISTRIBUTION_DIFF_RULES, :Gamma)
 function beta_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_β), partial)
     q = quote end
     pre_quote = quote end
-    return_expr = Expr(:tuple, :out)
+    return_expr = Expr(:tuple, :(extract_data(target)))
     loop = any((yisvec, αisvec, βisvec))
     # set initialized to loop; if we are looping, we'll start out at zero
     initialized = loop
@@ -678,9 +718,9 @@ function beta_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_β
         push!(q.args, :( am1 = $αm1expr))
         push!(q.args, :( logy = $logyexpr))
         if initialized
-            push!(q.args, :( out += am1 * logy ) )
+            push!(q.args, :( target = vmuladd(am1, logy, target) ) )
         else
-            push!(q.args, :( out = am1 * logy ) )
+            push!(q.args, :( target = am1 * logy ) )
             initialized = true
         end
         if partial
@@ -692,9 +732,9 @@ function beta_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_β
         push!(q.args, :( bm1 = $βm1expr))
         push!(q.args, :( logomy = $logomyexpr))
         if initialized
-            push!(q.args, :( out += bm1 * logomy ) )
+            push!(q.args, :( target = vmuladd(bm1, logomy, target) ) )
         else
-            push!(q.args, :( out = bm1 * logomy ) )
+            push!(q.args, :( target = bm1 * logomy ) )
             initialized = true
         end
         if partial
@@ -711,9 +751,9 @@ function beta_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_β
     if track_α || track_β
         push!(q.args, :(ly = $logyexpr))
         if initialized
-            push!(q.args, :( out -= $lbetaβexpr ) )
+            push!(q.args, :( target = vsub(target, $lbetaβexpr) ) )
         else
-            push!(q.args, :( out = -$lbetaβexpr ) )
+            push!(q.args, :( target = -$lbetaβexpr ) )
             initialized = true
         end
         if partial
@@ -740,7 +780,8 @@ function beta_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_β
             $(Expr(:meta,:inline))
             @fastmath begin
                 $pre_quote
-                out = zero($T)
+                target = vbroadcast(Vec{$(VectorizationBase.pick_vector_width(T)),$T}, zero($T))
+#                out = zero($T)
             end
             @vectorize $T for i ∈ 1:$M
                 $q

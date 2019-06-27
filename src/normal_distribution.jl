@@ -10,7 +10,8 @@ function univariate_normal_quote(
 
     # q = quote end
     pre_quote = quote
-        qf = zero($T)
+        qf = SIMDPirates.vbroadcast(SVec{$(VectorizationBase.pick_vector_width(M,T)),$T}, zero($T))
+#        qf = zero($T)
     end
     if !stddev
         # For now, we will require σ to be a scalar; ie, th eonly way to reach this is through UniformScaling
@@ -41,15 +42,17 @@ function univariate_normal_quote(
     else # μisvec == false
         δexpr = :($yexpr - μ)
     end
+
+    # add target
     if σisvec == nothing
         push!(pre_quote.args, :(σ⁻¹ = 1 ))
         # σ == 1
         loop_expr = quote
             δ = $δexpr
             δσ⁻¹ = δ
-            qf += δ * δ
+            qf = SIMDPirates.vmuladd(δ, δ, qf)
         end
-        push!(return_expr.args, :( $T(-0.5)*qf ))
+        push!(return_expr.args, :( extract_data(vmul($(T(-0.5)),qf) )))
     elseif σisvec# == true
         push!(pre_quote.args, :(logdetσ = zero($T)))
         if stddev
@@ -58,14 +61,14 @@ function univariate_normal_quote(
                 σ⁻¹ = 1 / σ[i]
                 δσ⁻¹ = δ * σ⁻¹
                 δσ⁻² = δσ⁻¹ * δσ⁻¹
-                qf += δσ⁻²
+                qf = SIMDPirates.vadd(qf, δσ⁻²)
             end
-            push!(pre_quote.args, :(logdetσ = zero($T)))
             if track_σ
-                push!(loop_expr.args, :(logdetσ -= SLEEFPirates.log(σ[i])))
-                push!(return_expr.args, :( $(T(-0.5))*qf + logdetσ ))
+                push!(pre_quote.args, :(logdetσ = vbroadcast(SVec{$(VectorizationBase.pick_vector_width(M,T)),$T}, zero($T)) ))
+                push!(loop_expr.args, :(logdetσ = vsub( logdetσ, SLEEFPirates.log(σ[i]))))
+                push!(return_expr.args, :( extract_data(vmuladd($(T(-0.5)), qf, logdetσ) )))
             else
-                push!(return_expr.args, :( $(T(-0.5))*qf ))
+                push!(return_expr.args, :( extract_data(vmul($(T(-0.5)), qf ))))
             end
         # else # variance parameter
         #     loop_expr = quote
@@ -87,34 +90,34 @@ function univariate_normal_quote(
                 δ = $δexpr
                 δσ⁻¹ = δ * σ⁻¹
                 δσ⁻² = δσ⁻¹ * δσ⁻¹
-                qf += δσ⁻²
+                qf = SIMDPirates.vadd(δσ⁻², qf)
             end
-            push!(return_expr.args, :( $T(-0.5)*qf - $M * Base.log(σ) ))
+            push!(return_expr.args, :( DistributionParameters.Target( extract_data( vmul($(T(-0.5), qf) )), - $M * Base.log(σ) )))
         else
             loop_expr = quote
                 δ = $δexpr
                 δσ⁻¹ = δ * σ⁻¹
-                qf += δσ⁻¹ * δσ⁻¹
+                qf = SIMDPirates.vmuladd(δσ⁻¹, δσ⁻¹, qf)
             end
-            push!(return_expr.args, :( $T(-0.5)*qf ))
+            push!(return_expr.args, :( extract_data( vmul($(T(-0.5)), qf ))) )
         end
     else #σisvec == false
         # we do not need to keep track of δ / σ
         loop_expr = quote
             δ = $δexpr
-            qf += δ * δ
+            qf = SIMDPirates.vmuladd(δ, δ, qf)
         end
         if track_σ
             if stddev
-                push!(return_expr.args, :( $T(-0.5)*qf/(σ*σ) - $M * Base.log(σ) ))
+                push!(return_expr.args, :( DistributionParameters.Target( extract_data( vmul($(T(-0.5))/(σ*σ),qf)),  $M * Base.log(σ) )))
             else # variance parameter
-                push!(return_expr.args, :( $T(-0.5)*qf/σ + $(T(-0.5M)) * Base.log(σ) ))
+                push!(return_expr.args, :( DistributionParameters.Target( extract_data( vmul($(T(-0.5))/σ,qf) ), $(T(-0.5M)) * Base.log(σ) )))
             end
         else # σ not tracked, so we drop the constant term
             if stddev
-                push!(return_expr.args, :( $T(-0.5)*qf/(σ*σ) ))
+                push!(return_expr.args, :( extract_data( vmul($(T(-0.5))/(σ*σ), qf) )) )
             else # variance parameter
-                push!(return_expr.args, :( $T(-0.5)*qf/σ ))
+                push!(return_expr.args, :( extract_data( vmul($(T(-0.5))/σ, qf) )) )
             end
         end
     end
@@ -330,7 +333,7 @@ end
 end
 
 
-using DistributionParameters: MultivariateNormalVariate, DynamicCovarianceMatrix
+using DistributionParameters: AbstractFixedSizeCovarianceMatrix, AbstractCovarianceMatrix
 function logdet_triangle(A::AbstractMatrix{T}) where {T}
     N = size(A,1)
     W, Wshift = VectorizationBase.pick_vector_width_shift(T)
@@ -352,21 +355,48 @@ function logdet_triangle(A::AbstractMatrix{T}) where {T}
     end
     out
 end
+function vlogdet_triangle(A::AbstractMatrix{T}) where {T}
+    N = size(A,1)
+    W, Wshift = VectorizationBase.pick_vector_width_shift(T)
+    Nrep = N >> Wshift
+
+    vout = vbroadcast(Vec{W,T}, zero(T))
+    @inbounds for i ∈ 0:Nrep-1
+        x = ntuple(w -> Core.VecElement(A[W*i+w,W*i+w]), Val(W))
+        vout = SIMDPirates.vadd(
+            vout,
+            SLEEFPirates.log( x )
+        )
+    end
+    offset = N & -W
+    x = ntuple(Val(W)) do w
+        i = w + offset
+        @inbounds i > N ? Core.VecElement(one(T)) : Core.VecElement(A[i,i])
+    end
+    SIMDPirates.vadd( vout, SLEEFPirates.log( x ) )
+end
 
 
 @generated function Normal!(
     δ::AbstractMatrix{T},
     Y::NTuple{K},
     μ::NTuple{K,V},
-    Σ::DynamicCovarianceMatrix{T},
+    Σ::AbstractFixedSizeCovarianceMatrix{KT,T},
     ::Val{track}
-) where {T, K, P, V <: PaddedMatrices.AbstractFixedSizePaddedVector{P,T}, track}
+) where {T, K, P, V <: PaddedMatrices.AbstractFixedSizePaddedVector{P,T}, KT, track}
     W, Wshift = VectorizationBase.pick_vector_width_shift(P, T)
     track_Y, track_μ, track_Σ = track
 #    reps, rem = divrem(P, W)
 #    if rem == 0 && reps < VectorizationBase.REGISTER_COUNT - 1
 #        fill_δ = quote end
     quote
+#=        ss = zero(T)
+        @inbounds @fastmath for c ∈ 1:$KT, r ∈ c:$KT
+            ss += Σ[r,c]
+        end
+        return sum(μ[1]) + sum(μ[2]) + ss=#
+
+
         coffset = 0
         for k ∈ 1:$K
             Yₖ = Y[k]
@@ -382,39 +412,64 @@ end
             end
             coffset += ncol
         end
-        L = Σ.data
+        L = Σ#.data
         LinearAlgebra.LAPACK.potrf!('L', L)
         LinearAlgebra.LAPACK.trtrs!('L', 'N', 'N', L, δ)
-        target = zero($T)
-        @inbounds @simd for i ∈ 1:length(δ)
-            target = muladd(δ[i],δ[i],target)
+        #=
+        Base.Cartesian.@nexprs 4 j -> target_j = SIMDPirates.vbroadcast(Vec{$(VectorizationBase.pick_vector_width(KT,T)),$T}, zero($T))
+        δ_ptr = pointer(δ)
+        Nδ = length(δ)
+        for i ∈ 0:Nδ >> $(Wshift + 2) - 1
+            Base.Cartesian.@nexprs 4 j -> begin
+                vδ_j = SIMDPirates.vload(Vec{$W,$T}, δ_ptr + $(sizeof(T)*W) * ((j-1)+4i) )
+                target_j = vmuladd( vδ_j, vδ_j, target )
+            end
+#            target = SIMDPirates.vmuladd( δ[i], δ[i], target )
         end
-        $(track_Σ ? :(muladd($(T(-0.5)), target, -coffset*logdet_triangle(L))) : :($(T(0.5)) * target))        
+        for i ∈ 
+        target_1 = vadd(target_1, target_3)
+        target_2 = vadd(target_2, target_4)
+            target = vadd(target_1, target_2)
+        =#
+        
+        starget = vbroadcast(SVec{$(VectorizationBase.pick_vector_width(T)),T}, zero($T))
+        @vectorize for i ∈ 1:length(δ)
+            vδ = δ[i]
+            starget = vmuladd( vδ, vδ, starget )
+        end
+        target = extract_data(starget)
+        $(track_Σ ? :(vmuladd($(T(-0.5)), target, vmul(-one($T)*coffset, vlogdet_triangle(L)))) : :(vmul($(T(-0.5)), target)))
+
     end
 end
-function Normal(sp::StackPointer, Y::NTuple{K}, μ::NTuple{K}, Σ::DynamicCovarianceMatrix{T}, ::Val{track}) where {K, T, track}
+
+# Inlined because of:
+# https://github.com/JuliaLang/julia/issues/32414
+# Stop forcing inlining when the issue is fixed.
+@inline function Normal(sp::StackPointer, Y::NTuple{K}, μ::NTuple{K}, Σ::AbstractFixedSizeCovarianceMatrix{KT,T}, ::Val{track}) where {K, KT, T, track}
+    Wm1 = VectorizationBase.pick_vector_width(KT,T) - 1
     cols = 0
     @inbounds for k ∈ 1:K
         cols += size(Y[k], 2)
     end
-    rows = @inbounds length(μ[1])
-    δ = DynamicPtrMatrix(pointer(sp, T), (rows, cols), rows)
+    δ = DynamicPtrMatrix(pointer(sp, T), (KT, cols), KT)# (KT+Wm1) & ~Wm1)
     # return sp, to reuse memory
     sp, Normal!(δ, Y, μ, Σ, Val{track}())
 end
 @generated function ∂Normal!(
 #    ∂μ::Union{Nothing,NTuple{K,V}},
-    ∂Σ::Union{Nothing,AbstractMatrix{T}},
+#    ∂Σ::Union{Nothing,AbstractMatrix{T}},
     Σ⁻¹δ::AbstractMatrix{T},
     δ::AbstractMatrix{T},
     Y::NTuple{K},
     μ::NTuple{K,V},
-    Σ::DynamicCovarianceMatrix{T},
-    ::Val{track_μ}
-) where {T, K, P, V <: PaddedMatrices.AbstractFixedSizePaddedVector{P,T}, track_μ}
+    Σ::AbstractFixedSizeCovarianceMatrix{KT,T,R},
+    ::Val{track}
+) where {T, K, P, R, V <: PaddedMatrices.AbstractFixedSizePaddedVector{P,T}, KT, track}
     W, Wshift = VectorizationBase.pick_vector_width_shift(P, T)
+    track_Y, track_μ, track_Σ = track
 #    track_μ = ∂μ != Nothing
-    track_Σ = ∂Σ != Nothing
+#    track_Σ = ∂Σ != Nothing
 #    track_Y, track_μ, track_Σ = track
 #    @assert track_Y == false
     if !(track_μ | track_Σ)
@@ -422,78 +477,180 @@ end
     else
         ret = Expr(:tuple, :target)
     end
+    track_Y && push!(ret.args, :∂Y)
     track_μ && push!(ret.args, :∂μ)
     track_Σ && push!(ret.args, :∂Σ)
-    q = quote
-        coffset = 0
-        for k ∈ 1:$K
-            Yₖ = Y[k]
-            μₖ = μ[k]
-            ncol = size(Yₖ, 2)
-            # Could avoid reloading μₖ
-            # but performance difference seemed negligible in benchmarks
-            # so, I figured I'd go for smaller code size.
-            for c ∈ 1:ncol
-                @vectorize $T for p ∈ 1:$P
-                    δₚ = μₖ[p] - Yₖ[p,c]
-                    δ[p,c+coffset] = δₚ
-                    Σ⁻¹δ[p,c+coffset] = δₚ
-                end
+    if track_Σ
+        q = quote
+#=            ss = zero(T)
+            @inbounds @fastmath for c ∈ 1:$KT, r ∈ c:$KT
+                ss += Σ[r,c]
             end
-            coffset += ncol
+            return (sum(μ[1]) + sum(μ[2]) + ss), DistributionParameters.One(), DistributionParameters.One()=#
+
+            
+            coffset = 0
+            for k ∈ 1:$K
+                Yₖ = Y[k]
+                μₖ = μ[k]
+                ncol = size(Yₖ, 2)
+                # Could avoid reloading μₖ
+                # but performance difference seemed negligible in benchmarks
+                # so, I figured I'd go for smaller code size.
+                for c ∈ 1:ncol
+#                for p ∈ 1:$P
+                    @vectorize $T for p ∈ 1:$P
+                        δₚ = μₖ[p] - Yₖ[p,c]
+                        δ[p,c+coffset] = δₚ
+#                        Σ⁻¹δ[p,c+coffset] = δₚ
+                    end
+                end
+                coffset += ncol
+            end
+            L = Σ#.data
+            LinearAlgebra.LAPACK.potrf!('L', Σ)
+            logdetL = vlogdet_triangle(L)
+            Σ⁻¹ = L
+            LinearAlgebra.LAPACK.potri!('L', Σ⁻¹)
+            LinearAlgebra.BLAS.symm!('L', 'L', one($T), Σ, δ, zero($T), Σ⁻¹δ)
+#            LinearAlgebra.LAPACK.potrs!('L', L, Σ⁻¹δ)
+            starget = vbroadcast(SVec{$(VectorizationBase.pick_vector_width(T)),$T}, zero($T))
+            @vectorize for i ∈ 1:length(δ)
+                starget = vmuladd( Σ⁻¹δ[i], δ[i], starget )
+            end
+            target = extract_data(starget)
         end
-        L = Σ.data
-        LinearAlgebra.LAPACK.potrf!('L', Σ)
-        $(track_Σ ? :( logdetL = logdet_triangle(L); ) : nothing)
-        LinearAlgebra.LAPACK.potrs!('L', L, Σ⁻¹δ)
-        target = zero($T)
-        @inbounds @simd ivdep for i ∈ 1:length(δ)
-            target = muladd(Σ⁻¹δ[i],δ[i],target)
+    else
+        q = quote
+            coffset = 0
+            for k ∈ 1:$K
+                Yₖ = Y[k]
+                μₖ = μ[k]
+                ncol = size(Yₖ, 2)
+                # Could avoid reloading μₖ
+                # but performance difference seemed negligible in benchmarks
+                # so, I figured I'd go for smaller code size.
+                for c ∈ 1:ncol
+#                for p ∈ 1:$P
+                    @vectorize $T for p ∈ 1:$P
+                        δₚ = μₖ[p] - Yₖ[p,c]
+                        δ[p,c+coffset] = δₚ
+                        Σ⁻¹δ[p,c+coffset] = δₚ
+                    end
+                end
+                coffset += ncol
+            end
+            L = Σ#.data
+            LinearAlgebra.LAPACK.potrf!('L', Σ)
+            LinearAlgebra.LAPACK.potrs!('L', L, Σ⁻¹δ)
+            starget = vbroadcast(SVec{$(VectorizationBase.pick_vector_width(T)),$T}, zero($T))
+            @vectorize for i ∈ 1:length(δ)
+                starget = vmuladd( Σ⁻¹δ[i], δ[i], starget )
+            end
+            target = extract_data(starget)
         end
     end
-    if track_μ
+    
+#=    if track_Y
+    # Need to make these negative. Figure out best way to handle stack pointers.
         ∂μq = Expr(:tuple,)
-        push!(q.args, coffset = 0)
+        push!(q.args, :(coffset = 0))
         for k ∈ 1:K
             ∂μₖ = Symbol(:∂μ_, k)
             push!(∂μq.args, ∂μₖ)
-            push!(q.args, :(ncol = size(Y[k],2); $∂μₖ = view( Σ⁻¹δ, :, coffset+1:coffset+ncol ); coffset += ncol))
+            push!(q.args, quote
+                  ncol = size(Y[$k],2)
+                  $∂μₖ = view( Σ⁻¹δ, :, coffset+1:coffset+ncol )
+                  coffset += ncol
+                  end)
+        end
+        push!(q.args, :(∂μ = $∂μq))
+    end =#
+    if track_μ
+        ∂μq = Expr(:tuple,)
+        push!(q.args, :(coffset = 0))
+        @assert !track_Y
+        # Note that Σ⁻¹δ would be ∂Yₖ
+        # so once we support that, we'll instead
+        # of overwriting the first columns of δ
+        # we'll write after the end of the array.
+        push!(q.args, :(ptr_δ = pointer(δ)))
+        for k ∈ 1:K
+            ∂μₖ = Symbol(:∂μ_, k)
+            ∂Yₖ = Symbol(:∂Y_, k)
+            push!(∂μq.args, ∂μₖ)
+            push!(q.args, quote
+                  ncol = size(Y[$k],2)
+                  $∂Yₖ = view( Σ⁻¹δ, :, coffset+1:coffset+ncol )
+                  $∂μₖ = PtrVector{$P,$T,$R,$R}( ptr_δ + $(sizeof(T)*R*(k-1)) ) #view( Σ⁻¹δ, :, coffset+1:coffset+ncol )
+                  PaddedMatrices.negative_sum!($∂μₖ, $∂Yₖ)
+                  coffset += ncol
+                  end)
         end
         push!(q.args, :(∂μ = $∂μq))
     end
     if track_Σ
         push!(q.args, quote
-              LinearAlgebra.BLAS.syrk!('L', 'N', $(T(0.5)), Σ⁻¹δ, zero($T), ∂Σ)
-              target = muladd($(T(-0.5)), target, -coffset*logdetL)
-              end)
+              ldfactor = -one($T)*coffset
+              ∂Σ = Σ⁻¹
+              LinearAlgebra.BLAS.syrk!('L', 'N', one($T), Σ⁻¹δ, ldfactor, ∂Σ)
+#              LinearAlgebra.BLAS.syrk!('L', 'N', $(T(0.5)), Σ⁻¹δ, $(T(0.5)) * ldfactor, ∂Σ)
+              @inbounds for i ∈ 1:$KT
+                  ∂Σ[i,i] *= 0.5
+              end
+              #              target = vmul($(T(-0.5)), target)
+              target = vmuladd($(T(-0.5)), target, vmul(ldfactor, logdetL) )
+        end)
     else
-        push!(q.args, :(target *= $(T(0.5))))
+        push!(q.args, :(target = vmul($(T(-0.5)),target)))
     end
     push!(q.args, ret)
     q
 end
-@generated function ∂Normal(sp::StackPointer, Y::NTuple{K}, μ::NTuple{K}, Σ::DynamicCovarianceMatrix{T}, ::Val{track}) where {K, T, track}
+@generated function ∂Normal(
+    sp::StackPointer,
+    Y::NTuple{K},
+    μ::NTuple{K},
+    Σ::AbstractFixedSizeCovarianceMatrix{KT,T,KT},
+    ::Val{track}
+) where {KT, K, T, track}
+#) where {K, T, KT, track}
     track_Y, track_μ, track_Σ = track
+#    Wm1 = VectorizationBase.pick_vector_width(KT,T)-1
+    #    R = (KT + Wm1) & ~Wm1
+    R = KT
     @assert !track_Y
     q = quote
+        # Inlined because of:
+        # https://github.com/JuliaLang/julia/issues/32414
+        # Stop forcing inlining when the issue is fixed.
+        $(Expr(:meta,:inline))
+
         cols = 0
-        @inbounds for k ∈ 1:K
+        @inbounds for k ∈ 1:$K
             cols += size(Y[k], 2)
         end
-        rows = @inbounds length(μ[1])
     end
-    if track_Σ
-        push!(q.args, :((sp, ∂Σ) = DynamicPtrMatrix{$T}(sp, (rows,rows), rows)))
-    else
-        push!(q.args, :(∂Σ = nothing))
-    end
-    push!(q.args, :((sp, Σ⁻¹δ) = DynamicPtrMatrix{$T}(sp, (rows,cols), rows)))
-    push!(q.args, :(δ = DynamicPtrMatrix(pointer(sp, $T), (rows, cols), rows)))
-    push!(q.args, :(sp, ∂Normal!(∂Σ, Σ⁻¹δ, δ, Y, μ, Σ, Val{$track_μ}()) ))
+#    if track_Σ
+#        push!(q.args, :((sp, ∂Σ) = DistributionParameters.PtrFixedSizeCovarianceMatrix{$KT,$T}(sp)))#, ($KT,$KT), $((KT+Wm1) & ~Wm1))))
+##        push!(q.args, :((sp, ∂Σ) = PtrMatrix{$KT,$T}(sp)))#, ($KT,$KT), $((KT+Wm1) & ~Wm1))))
+##        push!(q.args, :((sp, ∂Σ) = DynamicPtrMatrix{$T}(sp, ($KT,$KT), $((KT+Wm1) & ~Wm1))))
+#    else
+#        push!(q.args, :(∂Σ = nothing))
+#    end
+    # This needs to be changed once we add support for track_Y == true
+    # once we do that, we'll have to change where the pointers go, and
+    # where sp ends up. Ideally, we calculate the best place at compile time
+#    push!(q.args, :((sp, Σ⁻¹δ) = DynamicPtrMatrix{$T}(sp, ($KT,cols), $R)))
+    push!(q.args, :(stack_pointer = pointer(sp,$T)))
+    push!(q.args, :(δ = DynamicPtrMatrix(stack_pointer, ($KT, cols), $R)))
+    push!(q.args, :(Σ⁻¹δ = DynamicPtrMatrix(stack_pointer + $(sizeof(T)*R)*cols, ($KT,cols), $R)))
+    push!(q.args, :(sp = sp + $(K*sizeof(T)*R) ))
+    push!(q.args, :(sp, ∂Normal!(Σ⁻¹δ, δ, Y, μ, Σ, Val{$track}()) ))
     q
 end
 
-
+#=
 
 function Normal(δ::AbstractPaddedMatrix{T}, Y::NTuple{K}, μ::NTuple{K}, Σ::DynamicCovarianceMatrix{T}, ::Val{track}) where {T, K, track}
     track_Y, track_Σ = track
@@ -562,7 +719,7 @@ function ∂Normal(Y::NTuple{N,MultivariateNormalVariate{T}}, Σ::DynamicCovaria
     
     muladd(-0.5, target, Ny*logdet_triangle(cholΣ)), ntuple(n -> Y[n].Σ⁻¹δ, Val(N)), Σ.∂Σ
 end
-
+=#
 
 @generated function ∂Normal(y::AbstractFixedSizePaddedVector{M,T}, ::Val{track}) where {M,T,track}
     univariate_normal_quote( M, T, true, nothing, nothing, (track[1], false, false), true, true)
@@ -647,7 +804,7 @@ function matrix_normal_ar_lkj_quote(M, N, T, (track_y, track_μ, track_Λ, track
         i = 0
     end
     loop_block = quote
-        Yblock = SIMDPirates.vload($V, Yᵥ + i)
+        Yblock = vload($V, Yᵥ + i)
         PaddedMatrices.diff!(δ, μ, Yblock)
         mul!(δU, δ, U)
     end
@@ -657,7 +814,7 @@ function matrix_normal_ar_lkj_quote(M, N, T, (track_y, track_μ, track_Λ, track
         # First, we look at initializations
         if track_μ
             push!(initialize_block.args, :(∂qf∂δ = zero(PaddedMatrices.MutableFixedSizePaddedMatrix{$M,$N,Vec{$W,$T}}) ))
-            push!(return_expr.args, :( SIMDPirates.vsum(∂qf∂δ) ) )
+            push!(return_expr.args, :( vsum(∂qf∂δ) ) )
         end
         if ( track_μ || track_L )
             push!(initialize_block.args, :(Λᵥ′ΛᵥδU = PaddedMatrices.MutableFixedSizePaddedMatrix{$M,$N,Vec{$W,$T}}(undef) ))
@@ -665,7 +822,7 @@ function matrix_normal_ar_lkj_quote(M, N, T, (track_y, track_μ, track_Λ, track
         if track_Λ
             push!(initialize_block.args, :(∂qf∂Λ = vbroadcast(Vec{$W,$T}, zero($T))))
             push!(closing_block.args, :((logdetΛ, ∂logdetΛ) = StructuredMatrices.∂logdet(Λ)))
-            push!(return_expr.args, :(SIMDPirates.vsum(∂qf∂Λ) + $N * Ny * ∂logdetΛ))
+            push!(return_expr.args, :(vsum(∂qf∂Λ) + $N * Ny * ∂logdetΛ))
         end
         if track_L
             push!(initialize_block.args, :((U, ∂U∂L) = StructuredMatrices.∂inv(L)))
@@ -681,22 +838,22 @@ function matrix_normal_ar_lkj_quote(M, N, T, (track_y, track_μ, track_Λ, track
             if track_Λ
                 push!(loop_block.args, quote
                     qfᵢ, ∂qf∂Λᵢ = StructuredMatrices.∂selfcrossmul_and_quadform!(Λᵥ′ΛᵥδU, Λᵥ, δU)
-                    qf = SIMDPirates.vadd(qfᵢ, qf)
-                    ∂qf∂Λ = SIMDPirates.vadd(∂qf∂Λᵢ, ∂qf∂Λ)
+                    qf = vadd(qfᵢ, qf)
+                    ∂qf∂Λ = vadd(∂qf∂Λᵢ, ∂qf∂Λ)
                 end)
             else
                 push!(loop_block.args, quote
-                    qf = SIMDPirates.vadd(StructuredMatrices.selfcrossmul_and_quadform!(Λᵥ′ΛᵥδU, Λᵥ, δU), qf)
+                    qf = vadd(StructuredMatrices.selfcrossmul_and_quadform!(Λᵥ′ΛᵥδU, Λᵥ, δU), qf)
                 end)
             end
         elseif track_Λ
             push!(loop_block.args, quote
                 qfᵢ, ∂qf∂Λᵢ = StructuredMatrices.∂quadform(Λᵥ, δU)
-                qf = SIMDPirates.vadd(qfᵢ, qf)
-                ∂qf∂Λ = SIMDPirates.vadd(∂qf∂Λᵢ, ∂qf∂Λ)
+                qf = vadd(qfᵢ, qf)
+                ∂qf∂Λ = vadd(∂qf∂Λᵢ, ∂qf∂Λ)
             end)
         else
-            push!(loop_block.args, :(qf = SIMDPirates.vadd(StructuredMatrices.quadform(Λᵥ, δU), qf)))
+            push!(loop_block.args, :(qf = vadd(StructuredMatrices.quadform(Λᵥ, δU), qf)))
         end
         track_L && push!(loop_block.args, :(StructuredMatrices.submul!(∂qf∂U, δ', Λᵥ′ΛᵥδU)))
         track_μ && push!(loop_block.args, :(StructuredMatrices.submul!(∂qf∂δ, Λᵥ′ΛᵥδU, U')))
@@ -704,33 +861,33 @@ function matrix_normal_ar_lkj_quote(M, N, T, (track_y, track_μ, track_Λ, track
         track_L && push!(closing_block.args, :(logdetL = logdet(L)))
         track_Λ && push!(closing_block.args, :(logdetΛ = logdet(Λ)))
 
-        push!(loop_block.args, :(qf = SIMDPirates.vadd(StructuredMatrices.quadform(Λᵥ, δU), qf)))
+        push!(loop_block.args, :(qf = vadd(StructuredMatrices.quadform(Λᵥ, δU), qf)))
     end
     push!(loop_block.args, :(i += $W))
     # Here we handle the log determinants
     if track_L
         if track_Λ # track_L and track_Λ
-            push!(closing_block.args, :(@fastmath qfscalar = Ny * ( $N * logdetΛ - $M * logdetL) - 0.5 * SIMDPirates.vsum(qf) ))
+            push!(closing_block.args, :(@fastmath qfscalar = Ny * ( $N * logdetΛ - $M * logdetL) - 0.5 * vsum(qf) ))
         else # track_L but not Λ
-            push!(closing_block.args, :(@fastmath qfscalar = -Ny * $M * logdetL - 0.5 * SIMDPirates.vsum(qf) ))
+            push!(closing_block.args, :(@fastmath qfscalar = -Ny * $M * logdetL - 0.5 * vsum(qf) ))
         end
         if partial
             push!(closing_block.args, quote
                 ∂qf∂L_part = StructuredMatrices.vsumvec(∂qf∂U)' * ∂U∂L
-                ∂qf∂L = SIMDPirates.vmuladd($T(-Ny * $M), ∂logdetL', ∂qf∂L_part)
+                ∂qf∂L = vmuladd($T(-Ny * $M), ∂logdetL', ∂qf∂L_part)
             end)
         end
     elseif track_Λ
-        push!(closing_block.args, :(@fastmath qfscalar = Ny * $N * logdetΛ - 0.5 * SIMDPirates.vsum(qf) ))
+        push!(closing_block.args, :(@fastmath qfscalar = Ny * $N * logdetΛ - 0.5 * vsum(qf) ))
     else
-        push!(closing_block.args, :(@fastmath qfscalar = - 0.5 * SIMDPirates.vsum(qf) ))
+        push!(closing_block.args, :(@fastmath qfscalar = - 0.5 * vsum(qf) ))
     end
     quote
         $initialize_block
         Ysize = size(Y.data, 3)
         remmask = Y.mask
         @inbounds for ifrac ∈ 1:Ysize
-            Yblock = SIMDPirates.vload($V, Yᵥ + i)
+            Yblock = vload($V, Yᵥ + i)
             PaddedMatrices.diff!(δ, μ, Yblock)
             if ifrac == Ysize
                 PaddedMatrices.mask!(δ, remmask)
@@ -801,7 +958,7 @@ function matrix_normal_ar_lkjinv_quote(M, N, T, (track_y, track_μ, track_Λ, tr
                 ∂qf∂δ = $∂qf∂δ
                 PaddedMatrices.zero!(∂qf∂δ)
             end)
-            push!(return_expr.args, :( SIMDPirates.vsum(∂qf∂δ) ) )
+            push!(return_expr.args, :( vsum(∂qf∂δ) ) )
         end
         if ( track_μ || track_U )
             # push!(initialize_block.args, :(Λᵥ′ΛᵥδU = PaddedMatrices.MutableFixedSizePaddedMatrix{$M,$N,Vec{$W,$T}}(undef) ))
@@ -811,7 +968,7 @@ function matrix_normal_ar_lkjinv_quote(M, N, T, (track_y, track_μ, track_Λ, tr
         if track_Λ
             push!(initialize_block.args, :(∂qf∂Λ = vbroadcast(Vec{$W,$T}, zero($T))))
             push!(closing_block.args, :((logdetΛ, ∂logdetΛ) = StructuredMatrices.∂logdet(Λ)))
-            push!(return_expr.args, :(SIMDPirates.vsum(∂qf∂Λ) + $N * Ny * ∂logdetΛ))
+            push!(return_expr.args, :(vsum(∂qf∂Λ) + $N * Ny * ∂logdetΛ))
         end
         if track_U
             push!(closing_block.args, :((logdetU, ∂logdetU) = StructuredMatrices.∂logdet(U)))
@@ -829,22 +986,22 @@ function matrix_normal_ar_lkjinv_quote(M, N, T, (track_y, track_μ, track_Λ, tr
             if track_Λ
                 push!(loop_block.args, quote
                     qfᵢ, ∂qf∂Λᵢ = StructuredMatrices.∂selfcrossmul_and_quadform!(Λᵥ′ΛᵥδU, Λᵥ, δU)
-                    qf = SIMDPirates.vadd(qfᵢ, qf)
-                    ∂qf∂Λ = SIMDPirates.vadd(∂qf∂Λᵢ, ∂qf∂Λ)
+                    qf = vadd(qfᵢ, qf)
+                    ∂qf∂Λ = vadd(∂qf∂Λᵢ, ∂qf∂Λ)
                 end)
             else
                 push!(loop_block.args, quote
-                    qf = SIMDPirates.vadd(StructuredMatrices.selfcrossmul_and_quadform!(Λᵥ′ΛᵥδU, Λᵥ, δU), qf)
+                    qf = vadd(StructuredMatrices.selfcrossmul_and_quadform!(Λᵥ′ΛᵥδU, Λᵥ, δU), qf)
                 end)
             end
         elseif track_Λ
             push!(loop_block.args, quote
                 qfᵢ, ∂qf∂Λᵢ = StructuredMatrices.∂quadform(Λᵥ, δU)
-                qf = SIMDPirates.vadd(qfᵢ, qf)
-                ∂qf∂Λ = SIMDPirates.vadd(∂qf∂Λᵢ, ∂qf∂Λ)
+                qf = vadd(qfᵢ, qf)
+                ∂qf∂Λ = vadd(∂qf∂Λᵢ, ∂qf∂Λ)
             end)
         else
-            push!(loop_block.args, :(qf = SIMDPirates.vadd(StructuredMatrices.quadform(Λᵥ, δU), qf)))
+            push!(loop_block.args, :(qf = vadd(StructuredMatrices.quadform(Λᵥ, δU), qf)))
         end
         track_U && push!(loop_block.args, :(StructuredMatrices.submul!(∂qf∂U, δ', Λᵥ′ΛᵥδU)))
         # if track_U
@@ -866,7 +1023,7 @@ function matrix_normal_ar_lkjinv_quote(M, N, T, (track_y, track_μ, track_Λ, tr
         track_U && push!(closing_block.args, :(logdetU = logdet(U)))
         track_Λ && push!(closing_block.args, :(logdetΛ = logdet(Λ)))
 
-        push!(loop_block.args, :(qf = SIMDPirates.vadd(StructuredMatrices.quadform(Λᵥ, δU), qf)))
+        push!(loop_block.args, :(qf = vadd(StructuredMatrices.quadform(Λᵥ, δU), qf)))
     end
     push!(loop_block.args, :(i += $W))
     # Here we handle the log determinants
@@ -903,7 +1060,7 @@ function matrix_normal_ar_lkjinv_quote(M, N, T, (track_y, track_μ, track_Λ, tr
         Ysize = size(Y.data, 3)
         remmask = Y.mask
         @inbounds for ifrac ∈ 1:Ysize
-            # Yblock = SIMDPirates.vload($V, Yᵥ + i)
+            # Yblock = vload($V, Yᵥ + i)
             # PaddedMatrices.diff!(δ, μ, Yblock)
             # PaddedMatrices.vload!(δ, Yᵥ + i)
             Yᵢ = PaddedMatrices.vload($V, Yᵥ + i)
@@ -911,7 +1068,7 @@ function matrix_normal_ar_lkjinv_quote(M, N, T, (track_y, track_μ, track_Λ, tr
             ifrac == Ysize && PaddedMatrices.mask!(δ, remmask)
             $loop_block
         end
-        qfvsum = SIMDPirates.vsum(qf)
+        qfvsum = vsum(qf)
         $closing_block
         $(return_expression(return_expr))
     end
@@ -936,6 +1093,4 @@ end
 end
 
 
-@support_stack_pointer Normal
-@support_stack_pointer ∂Normal
 
