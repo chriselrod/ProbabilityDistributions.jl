@@ -20,12 +20,13 @@ include("distribution_functions.jl")
 include("normal_distribution.jl")
 
 const STACK_POINTER_SUPPORTED_METHODS = Set{Symbol}()
+PaddedMatrices.@support_stack_pointer ∂lsgg
 PaddedMatrices.@support_stack_pointer ∂LKJ
 PaddedMatrices.@support_stack_pointer Normal
 PaddedMatrices.@support_stack_pointer ∂Normal
 
 function __init__()
-    for m ∈ (:∂LKJ, :Normal, :∂Normal)
+    for m ∈ (:∂lsgg, :∂LKJ, :Normal, :∂Normal)
         push!(PaddedMatrices.STACK_POINTER_SUPPORTED_METHODS, m)
     end
 end

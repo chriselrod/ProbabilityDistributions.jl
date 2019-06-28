@@ -507,8 +507,16 @@ end
                 end
                 coffset += ncol
             end
-            L = Σ#.data
-            LinearAlgebra.LAPACK.potrf!('L', Σ)
+            L, info = LinearAlgebra.LAPACK.potrf!('L', Σ)
+            if info != 0
+                ∂Σ = Σ
+                ptr_δ = pointer(δ)
+                $(track_μ ? Expr(:(=), :∂μ, Expr(:tuple, [:(PtrVector{$P,$T,$R,$R}( ptr_δ + $(sizeof(T)*R*(k-1)) )) for k ∈ 1:K]...)) : nothing)
+                # TODO: support track_Y
+   #             $(track_Y ? :() : nothing)
+                target = vbroadcast(Vec{$W,$T}, $(T(-Inf)))
+                return $ret
+            end
             logdetL = vlogdet_triangle(L)
             Σ⁻¹ = L
             LinearAlgebra.LAPACK.potri!('L', Σ⁻¹)

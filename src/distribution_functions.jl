@@ -829,3 +829,163 @@ end
     beta_quote(1, T, false, false, false, track, true)
 end
 push!(DISTRIBUTION_DIFF_RULES, :Beta)
+
+
+function lsgg_quotebeta_quote(
+    M::Int, T,
+    yisvec::Bool, αisvec::Bool, ϕisvec::Bool, δisvec::Bool, σisvec::Bool,
+    (track_y, track_α, track_ϕ, track_δ, track_σ)::NTuple{5,Bool},
+    partial::Bool, sp::Bool
+)
+#    s = T(log(log(100)))
+    # smy = s - y
+    # α * smy - exp(ϕ * (smy - δ));
+    @assert !any((track_α, track_ϕ, track_δ, track_σ))
+
+    # ϕ = log(β)
+    
+    q = quote end
+#    pre_quote = quote end
+#    return_expr = Expr(:tuple, :(extract_data(target)))
+#    loop = any((yisvec, αisvec, ϕisvec, δisvec, σisvec))
+    # set initialized to loop; if we are looping, we'll start out at zero
+#    initialized = loop
+    yexpr = yisvec ? :(y[m]) : :y
+    αexpr = αisvec ? :(α[m]) : :α
+    ϕexpr = ϕisvec ? :(ϕ[m]) : :ϕ
+    δexpr = δisvec ? :(δ[m]) : :δ
+    σexpr = σisvec ? :(σ[m]) : :σ
+
+    push!(q.args, :(smy = $σexpr - $yexpr) )
+    push!(q.args, :(asmy = $αexpr * smy))
+    push!(q.args, :(smyd = smy - $ϕexpr) )
+    push!(q.args, :(ptsmyd = smyd * $δexpr) )
+    push!(q.args, :(eptsmyd = $(any((yisvec, ϕisvec, δisvec, σisvec)) ? :SLEEFPirates : :Base).exp(ptsmyd)) )
+
+    W = VectorizationBase.pick_vector_width(M,T)
+
+    if partial
+        if yisvec
+            return quote
+                # Inlined because of Julia SIMD corruption bug (if sp)
+                # inlined to avoid heap allocation of mvector (if !sp)
+                $(Expr(:meta,:inline))
+                $(sp ? :((sp, ∂y) = PtrVector{$M,$T}(sp)) : :( ∂y = MutableFixedSizePaddedVector{$M,$T}(undef)))
+                target = SIMDPirates.vbroadcast(Vec{$W,$T}, zero($T))
+                LoopVectorization.@vvectorize for m ∈ 1:$M
+                    $q
+                    target = LoopVectorization.SIMDPirates.vadd(SIMDPirates.vsub(asmy, eptsmyd), target)
+                    ∂y[m] = SIMDPirates.vfmsub($δexpr, eptsmyd, $αexpr)
+                end
+                $(sp ? :(sp, (target, ∂y')) : :(target, ∂y'))
+            end
+        else
+            @assert !any((αisvec, ϕisvec, δisvec, σisvec))
+            return quote
+                @fastmath begin
+                    $q
+                    target = asmy - eptsmyd
+                    ∂y = $δexpr * eptsmyd - $αexpr
+                end
+                $(sp ? :(sp, (target, ∂y)) : :(target, ∂y))
+            end
+        end
+    else
+        if yisvec
+            return quote
+                # Inlined because of Julia SIMD corruption bug
+                $(Expr(:meta,:inline))
+                target = SIMDPirates.vbroadcast(Vec{$W,$T}, zero($T))
+                LoopVectorization.@vvectorize for m ∈ 1:$M
+                    $q
+                    target = LoopVectorization.SIMDPirates.vadd(SIMDPirates.vsub(asmy, eptsmyd), target)
+                end
+                $(sp ? :(sp, target) : :target)
+            end
+        else
+            @assert !any((αisvec, ϕisvec, δisvec, σisvec))
+            return quote
+                @fastmath begin
+                    $q
+                    target = asmy - eptsmyd
+                end
+                $(sp ? :(sp, target) : :target)
+            end
+        end
+    end
+end
+
+@generated function lsgg(y::AbstractFixedSizePaddedVector{M,T}, α, ϕ, δ, σ, ::Val{track}) where {M,T,track}
+    lsgg_quotebeta_quote(
+        M, T, true,
+        α <: AbstractArray,
+        ϕ <: AbstractArray,
+        δ <: AbstractArray,
+        σ <: AbstractArray,
+        track, false, false
+    )
+end
+@generated function ∂lsgg(y::AbstractFixedSizePaddedVector{M,T}, α, ϕ, δ, σ, ::Val{track}) where {M,T,track}
+    lsgg_quotebeta_quote(
+        M, T, true,
+        α <: AbstractArray,
+        ϕ <: AbstractArray,
+        δ <: AbstractArray,
+        σ <: AbstractArray,
+        track, true, false
+    )
+end
+@generated function ∂lsgg(sp::StackPointer, y::AbstractFixedSizePaddedVector{M,T}, α, ϕ, δ, σ, ::Val{track}) where {M,T,track}
+    lsgg_quotebeta_quote(
+        M, T, true,
+        α <: AbstractArray,
+        ϕ <: AbstractArray,
+        δ <: AbstractArray,
+        σ <: AbstractArray,
+        track, true, true
+    )
+end
+@generated function lsgg(y::T, α, ϕ, δ, σ, ::Val{track}) where {T<:Real,track}
+    @assert !any((
+        α <: AbstractArray,
+        ϕ <: AbstractArray,
+        δ <: AbstractArray,
+        σ <: AbstractArray,
+    ))
+    lsgg_quotebeta_quote(
+        1, T, false,
+        false,false,false,false,
+        track, false, false
+    )
+end
+@generated function ∂lsgg(y::T, α, ϕ, δ, σ, ::Val{track}) where {T<:Real,track}
+    @assert !any((
+        α <: AbstractArray,
+        ϕ <: AbstractArray,
+        δ <: AbstractArray,
+        σ <: AbstractArray,
+    ))
+    lsgg_quotebeta_quote(
+        1, T, false,
+        false,false,false,false,
+        track, true, false
+    )
+end
+@generated function ∂lsgg(sp::StackPointer, y::T, α, ϕ, δ, σ, ::Val{track}) where {T<:Real,track}
+    @assert !any((
+        α <: AbstractArray,
+        ϕ <: AbstractArray,
+        δ <: AbstractArray,
+        σ <: AbstractArray,
+    ))
+    lsgg_quotebeta_quote(
+        1, T, false,
+        false,false,false,false,
+        track, true, true
+    )
+end
+push!(DISTRIBUTION_DIFF_RULES, :lsgg)
+
+
+
+
