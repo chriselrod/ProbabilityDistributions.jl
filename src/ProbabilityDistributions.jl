@@ -15,18 +15,23 @@ using VectorizationBase: pick_vector_width, pick_vector_width_shift
 function return_expression(return_expr)
     length(return_expr.args) == 1 ? return_expr.args[1] : return_expr
 end
+function return_expression(return_expr, sp)
+    expr = length(return_expr.args) == 1 ? return_expr.args[1] : return_expr
+    sp ? Expr(:tuple, :sp, expr) : expr
+end
 
 include("distribution_functions.jl")
 include("normal_distribution.jl")
 
 const STACK_POINTER_SUPPORTED_METHODS = Set{Symbol}()
 PaddedMatrices.@support_stack_pointer ∂lsgg
+PaddedMatrices.@support_stack_pointer ∂Gamma
 PaddedMatrices.@support_stack_pointer ∂LKJ
 PaddedMatrices.@support_stack_pointer Normal
 PaddedMatrices.@support_stack_pointer ∂Normal
 
 function __init__()
-    for m ∈ (:∂lsgg, :∂LKJ, :Normal, :∂Normal)
+    for m ∈ (:∂lsgg, :∂Gamma, :∂LKJ, :Normal, :∂Normal)
         push!(PaddedMatrices.STACK_POINTER_SUPPORTED_METHODS, m)
     end
 end

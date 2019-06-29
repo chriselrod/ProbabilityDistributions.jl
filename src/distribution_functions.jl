@@ -380,7 +380,7 @@ end
 end
 push!(DISTRIBUTION_DIFF_RULES, :LKJ)
 
-function gamma_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_β), partial)
+function gamma_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_β), partial, sp = false)
     q = quote end
     pre_quote = quote end
     return_expr = Expr(:tuple, :(extract_data(target)))
@@ -420,7 +420,11 @@ function gamma_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_�
             if yisvec
                 ∂yassignment = :(=)
                 ∂ystorage = :(∂yᵢ)
-                push!(pre_quote.args, :(∂y = PaddedMatrices.MutableFixedSizePaddedVector{$M,$T}(undef)))
+                if sp
+                    push!(pre_quote.args, :((sp,∂y) = PaddedMatrices.PtrVector{$M,$T}(sp)))
+                else
+                    push!(pre_quote.args, :(∂y = PaddedMatrices.MutableFixedSizePaddedVector{$M,$T}(undef)))
+                end
                 push!(return_expr.args, :(∂y'))
                 # push!(return_expr.args, :(PaddedMatrices.ConstantFixedSizePaddedVector(∂y)'))
             else
@@ -438,8 +442,13 @@ function gamma_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_�
             if αisvec
                 ∂αassignment = :(=)
                 ∂αstorage = :(∂αᵢ)
-                push!(pre_quote.args, :(∂α = PaddedMatrices.MutableFixedSizePaddedVector{$M,$T}(undef)))
-                push!(return_expr.args, :(PaddedMatrices.ConstantFixedSizePaddedVector(∂α)'))
+                if sp
+                    push!(pre_quote.args, :(∂α = PaddedMatrices.PtrVector{$M,$T}(sp)))
+                else
+                    push!(pre_quote.args, :(∂α = PaddedMatrices.MutableFixedSizePaddedVector{$M,$T}(undef)))
+                end
+                push!(return_expr.args, :(∂α'))
+#                push!(return_expr.args, :(PaddedMatrices.ConstantFixedSizePaddedVector(∂α)'))
             else
                 ∂αstorage = :(∂α)
                 push!(return_expr.args, :(∂α))
@@ -455,8 +464,13 @@ function gamma_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_�
             if βisvec
                 ∂βassignment = :(=)
                 ∂βstorage = :(∂βᵢ)
-                push!(pre_quote.args, :(∂β = PaddedMatrices.MutableFixedSizePaddedVector{$M,$T}(undef)))
-                push!(return_expr.args, :(PaddedMatrices.ConstantFixedSizePaddedVector(∂β)'))
+                if sp
+                    push!(pre_quote.args, :(∂β = PaddedMatrices.PtrVector{$M,$T}(sp)))
+                else
+                    push!(pre_quote.args, :(∂β = PaddedMatrices.MutableFixedSizePaddedVector{$M,$T}(undef)))
+                end
+                push!(return_expr.args, :(∂β'))
+#                push!(return_expr.args, :(PaddedMatrices.ConstantFixedSizePaddedVector(∂β)'))
             else
                 ∂βstorage = :(∂β)
                 push!(return_expr.args, :(∂β))
@@ -548,7 +562,7 @@ function gamma_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_�
                 $q
             end
             @fastmath begin
-                $(return_expression(return_expr))
+                $(return_expression(return_expr, sp))
             end
         end
     else
@@ -557,7 +571,7 @@ function gamma_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_�
             @fastmath begin
                 $pre_quote
                 $q
-                $(return_expression(return_expr))
+                $(return_expression(return_expr, sp))
             end
         end
     end
@@ -573,7 +587,7 @@ end
 #) where {track,T,M}
     αisvec = isa(α, PaddedMatrices.AbstractFixedSizePaddedVector)
     βisvec = isa(β, PaddedMatrices.AbstractFixedSizePaddedVector)
-    gamma_quote(M, T, true, αisvec, βisvec, track, false)
+    gamma_quote(M, T, true, αisvec, βisvec, track, false, false)
 end
 @generated function ∂Gamma(
             y::PaddedMatrices.AbstractFixedSizePaddedVector{M,T},
@@ -583,13 +597,28 @@ end
             # ::Val{track}) where {track,T,M}
     αisvec = isa(α, PaddedMatrices.AbstractFixedSizePaddedVector)
     βisvec = isa(β, PaddedMatrices.AbstractFixedSizePaddedVector)
-    gamma_quote(M, T, true, αisvec, βisvec, track, true)
+    gamma_quote(M, T, true, αisvec, βisvec, track, true, false)
+end
+@generated function ∂Gamma(
+    sp::StackPointer,
+    y::PaddedMatrices.AbstractFixedSizePaddedVector{M,T},
+    α::Union{T,<:PaddedMatrices.AbstractFixedSizePaddedVector{M,T}},
+    β::Union{T,<:PaddedMatrices.AbstractFixedSizePaddedVector{M,T}},
+    ::Val{track}
+) where {track,M,T}
+            # ::Val{track}) where {track,T,M}
+    αisvec = isa(α, PaddedMatrices.AbstractFixedSizePaddedVector)
+    βisvec = isa(β, PaddedMatrices.AbstractFixedSizePaddedVector)
+    gamma_quote(M, T, true, αisvec, βisvec, track, true, true)
 end
 @generated function Gamma(y::T, α::T, β::T, ::Val{track}) where {track,T <: Real}
-    gamma_quote(1, T, false, false, false, track, false)
+    gamma_quote(1, T, false, false, false, track, false, false)
 end
 @generated function ∂Gamma(y::T, α::T, β::T, ::Val{track}) where {track,T <: Real}
-    gamma_quote(1, T, false, false, false, track, true)
+    gamma_quote(1, T, false, false, false, track, true, false)
+end
+@generated function ∂Gamma(sp::StackPointer, y::T, α::T, β::T, ::Val{track}) where {track,T <: Real}
+    gamma_quote(1, T, false, false, false, track, true, false)
 end
 
 push!(DISTRIBUTION_DIFF_RULES, :Gamma)
