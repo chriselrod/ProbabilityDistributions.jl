@@ -369,6 +369,7 @@ function vlogdet_triangle(A::AbstractMatrix{T}) where {T}
         )
     end
     offset = N & -W
+    offset == N && return vout
     x = ntuple(Val(W)) do w
         i = w + offset
         @inbounds i > N ? Core.VecElement(one(T)) : Core.VecElement(A[i,i])
