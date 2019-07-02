@@ -8,8 +8,8 @@ function univariate_normal_quote(
     (track_y, track_μ, track_σ)::NTuple{3,Bool},
     partial::Bool, stddev::Bool, sp::Bool = false
 )
-
-    return_scalar = true
+ #   return_scalar = true
+    return_scalar = false
     # q = quote end
     if M > 1
         pre_quote = quote
