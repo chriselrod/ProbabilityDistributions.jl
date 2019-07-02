@@ -11,6 +11,7 @@ using StructuredMatrices: AbstractAutoregressiveMatrix
 using DistributionParameters: AbstractLKJCorrCholesky
 using SIMDPirates: extract_data, vbroadcast, vadd, vsub, vfnmadd, vfmsub, vfnmsub, vsum, vload, vstore!
 using VectorizationBase: pick_vector_width, pick_vector_width_shift
+using LoopVectorization: @vvectorize
 
 function return_expression(return_expr)
     length(return_expr.args) == 1 ? return_expr.args[1] : return_expr

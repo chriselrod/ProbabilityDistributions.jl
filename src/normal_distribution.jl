@@ -3,15 +3,22 @@
 push!(DISTRIBUTION_DIFF_RULES, :Normal)
 
 function univariate_normal_quote(
-                M::Int, T::DataType, yisvec::Bool,
-                μisvec::Union{Bool,Nothing}, σisvec::Union{Bool,Nothing},
-                (track_y, track_μ, track_σ)::NTuple{3,Bool}, partial::Bool, stddev::Bool
-            )
+    M::Int, T::DataType, yisvec::Bool,
+    μisvec::Union{Bool,Nothing}, σisvec::Union{Bool,Nothing},
+    (track_y, track_μ, track_σ)::NTuple{3,Bool},
+    partial::Bool, stddev::Bool, sp::Bool = false
+)
 
+    return_scalar = true
     # q = quote end
-    pre_quote = quote
-        qf = SIMDPirates.vbroadcast(SVec{$(VectorizationBase.pick_vector_width(M,T)),$T}, zero($T))
-#        qf = zero($T)
+    if M > 1
+        pre_quote = quote
+            qf = SIMDPirates.vbroadcast(Vec{$(VectorizationBase.pick_vector_width(M,T)),$T}, zero($T))
+        end
+    else
+        pre_quote = quote
+            qf = zero($T)
+        end
     end
     if !stddev
         # For now, we will require σ to be a scalar; ie, th eonly way to reach this is through UniformScaling
@@ -50,9 +57,13 @@ function univariate_normal_quote(
         loop_expr = quote
             δ = $δexpr
             δσ⁻¹ = δ
-            qf = SIMDPirates.vmuladd(δ, δ, qf)
+            qf = LoopVectorization.SIMDPirates.vmuladd(δ, δ, qf)
         end
-        push!(return_expr.args, :( extract_data(vmul($(T(-0.5)),qf) )))
+        if return_scalar
+            push!(return_expr.args, :( SIMDPirates.vsum((vmul($(T(-0.5)),qf) ))))
+        else
+            push!(return_expr.args, :( vmul($(T(-0.5)),qf) ))
+        end            
     elseif σisvec# == true
         push!(pre_quote.args, :(logdetσ = zero($T)))
         if stddev
@@ -61,14 +72,26 @@ function univariate_normal_quote(
                 σ⁻¹ = 1 / σ[i]
                 δσ⁻¹ = δ * σ⁻¹
                 δσ⁻² = δσ⁻¹ * δσ⁻¹
-                qf = SIMDPirates.vadd(qf, δσ⁻²)
+                qf = LoopVectorization.SIMDPirates.vadd(qf, δσ⁻²)
             end
             if track_σ
-                push!(pre_quote.args, :(logdetσ = vbroadcast(SVec{$(VectorizationBase.pick_vector_width(M,T)),$T}, zero($T)) ))
+                if M > 1
+                    push!(pre_quote.args, :(logdetσ = vbroadcast(Vec{$(VectorizationBase.pick_vector_width(M,T)),$T}, zero($T)) ))
+                else
+                    push!(pre_quote.args, :(logdetσ = zero($T)) )
+                end
                 push!(loop_expr.args, :(logdetσ = vsub( logdetσ, SLEEFPirates.log(σ[i]))))
-                push!(return_expr.args, :( extract_data(vmuladd($(T(-0.5)), qf, logdetσ) )))
+                if return_scalar
+                    push!(return_expr.args, :( SIMDPirates.vsum(vmuladd($(T(-0.5)), qf, logdetσ) )))
+                else
+                    push!(return_expr.args, :( vmuladd($(T(-0.5)), qf, logdetσ) ))
+                end
             else
-                push!(return_expr.args, :( extract_data(vmul($(T(-0.5)), qf ))))
+                if return_scalar
+                    push!(return_expr.args, :( SIMDPirates.vsum(vmul($(T(-0.5)), qf ))))
+                else
+                  push!(return_expr.args, :( vmul($(T(-0.5)), qf )))
+                end
             end
         # else # variance parameter
         #     loop_expr = quote
@@ -90,34 +113,82 @@ function univariate_normal_quote(
                 δ = $δexpr
                 δσ⁻¹ = δ * σ⁻¹
                 δσ⁻² = δσ⁻¹ * δσ⁻¹
-                qf = SIMDPirates.vadd(δσ⁻², qf)
+                qf = LoopVectorization.SIMDPirates.vadd(δσ⁻², qf)
             end
-            push!(return_expr.args, :( DistributionParameters.Target( extract_data( vmul($(T(-0.5), qf) )), - $M * Base.log(σ) )))
+            if M > 1
+                if return_scalar
+                    push!(return_expr.args, :( SIMDPirates.vsum(DistributionParameters.Target(  vmul($(T(-0.5)), qf ), - $M * Base.log(σ) ))))
+                else
+                    push!(return_expr.args, :( DistributionParameters.Target( vmul($(T(-0.5)), qf ), - $M * Base.log(σ) )))
+                end
+            else
+                if return_scalar
+                    push!(return_expr.args, :( SIMDPirates.vsum(vmul($(T(-0.5)), qf) ) -  Base.log(σ) ))
+                else
+                    push!(return_expr.args, :( vmul($(T(-0.5)), qf) ) -  Base.log(σ) )
+                end
+            end
         else
             loop_expr = quote
                 δ = $δexpr
                 δσ⁻¹ = δ * σ⁻¹
-                qf = SIMDPirates.vmuladd(δσ⁻¹, δσ⁻¹, qf)
+                qf = LoopVectorization.SIMDPirates.vmuladd(δσ⁻¹, δσ⁻¹, qf)
             end
-            push!(return_expr.args, :( extract_data( vmul($(T(-0.5)), qf ))) )
+            if return_scalar
+                push!(return_expr.args, :( SIMDPirates.vsum( vmul($(T(-0.5)), qf ))) )
+            else
+                push!(return_expr.args, :( vmul($(T(-0.5)), qf ))) 
+            end
         end
     else #σisvec == false
         # we do not need to keep track of δ / σ
         loop_expr = quote
             δ = $δexpr
-            qf = SIMDPirates.vmuladd(δ, δ, qf)
+            qf = LoopVectorization.SIMDPirates.vmuladd(δ, δ, qf)
         end
         if track_σ
-            if stddev
-                push!(return_expr.args, :( DistributionParameters.Target( extract_data( vmul($(T(-0.5))/(σ*σ),qf)),  $M * Base.log(σ) )))
-            else # variance parameter
-                push!(return_expr.args, :( DistributionParameters.Target( extract_data( vmul($(T(-0.5))/σ,qf) ), $(T(-0.5M)) * Base.log(σ) )))
+            if M > 1
+                if stddev
+                    if return_scalar
+                        push!(return_expr.args, :( SIMDPirates.vsum(DistributionParameters.Target( vmul($(T(-0.5))/(σ*σ),qf),  - $M * Base.log(σ) ))))
+                    else
+                        push!(return_expr.args, :( DistributionParameters.Target( vmul($(T(-0.5))/(σ*σ),qf),  - $M * Base.log(σ) )))
+                    end
+                else # variance parameter
+                    if return_scalar
+                        push!(return_expr.args, :( SIMDPirates.vsum(DistributionParameters.Target( vmul($(T(-0.5))/σ,qf ), $(T(-0.5M)) * Base.log(σ) ))))
+                    else
+                        push!(return_expr.args, :( DistributionParameters.Target( extract_data( vmul($(T(-0.5))/σ,qf) ), $(T(-0.5M)) * Base.log(σ) )))
+                    end
+                end
+            else
+                if stddev
+                    if return_scalar
+                        push!(return_expr.args, :( SIMDPirates.vsum(vmul($(T(-0.5))/(σ*σ),qf)) - Base.log(σ) ))
+                    else
+                        push!(return_expr.args, :( DistributionParameters.Target(vmul($(T(-0.5))/(σ*σ),qf), - Base.log(σ) )))
+                    end
+                else # variance parameter
+                    if return_scalar
+                        push!(return_expr.args, :( SIMDPirates.vsum( vmul($(T(-0.5))/σ,qf) ) - $(T(-0.5)) * Base.log(σ) ))
+                    else
+                        push!(return_expr.args, :( DistributionParameters.Target( vmul($(T(-0.5))/σ,qf), - $(T(-0.5)) * Base.log(σ) )))
+                    end
+                end
             end
         else # σ not tracked, so we drop the constant term
             if stddev
-                push!(return_expr.args, :( extract_data( vmul($(T(-0.5))/(σ*σ), qf) )) )
+                if return_scalar
+                    push!(return_expr.args, :( SIMDPirates.vsum(extract_data( vmul($(T(-0.5))/(σ*σ), qf) )) ))
+                else
+                    push!(return_expr.args, :( extract_data( vmul($(T(-0.5))/(σ*σ), qf) )) )
+                end
             else # variance parameter
-                push!(return_expr.args, :( extract_data( vmul($(T(-0.5))/σ, qf) )) )
+                if return_scalar
+                    push!(return_expr.args, :( SIMDPirates.vsum(vmul($(T(-0.5))/σ, qf) )) )
+                else
+                    push!(return_expr.args, :( vmul($(T(-0.5))/σ, qf) ))
+                end
             end
         end
     end
@@ -131,7 +202,8 @@ function univariate_normal_quote(
             else
                 push!(pre_quote.args, :(∂y = zero($T)))
                 push!(loop_expr.args, :(∂y -= δσ⁻¹ * σ⁻¹))
-                push!(return_expr.args, :∂y)
+                push!(return_expr.args, :(∂y))
+#                push!(return_expr.args, :(∂y))
             end
         end
         if track_μ
@@ -148,15 +220,17 @@ function univariate_normal_quote(
         if track_σ
             if σisvec == true
                 push!(pre_quote.args, :(∂σ = MutableFixedSizePaddedVector{$M,$T}(undef) ))
+#                push!(loop_expr.args, :(∂σ[i] = δσ⁻² * σ⁻¹ ))
                 push!(loop_expr.args, :(∂σ[i] = δσ⁻² * σ⁻¹ - σ⁻¹ ))
                 push!(return_expr.args, :(ConstantFixedSizePaddedVector(∂σ)'))
             elseif σisvec == false
                 push!(pre_quote.args, :(∂σ = zero($T)))
-                push!(loop_expr.args, :(∂σ += δσ⁻² * σ⁻¹ - σ⁻¹ ))
+                push!(loop_expr.args, :(∂σ += δσ⁻² * σ⁻¹ ))
+#                push!(loop_expr.args, :(∂σ += δσ⁻² * σ⁻¹ - σ⁻¹ ))
                 if stddev
-                    push!(return_expr.args, :∂σ⁻¹)
+                    push!(return_expr.args, :(∂σ - $M*σ⁻¹ ) )
                 else
-                    push!(return_expr.args, :(∂σ⁻¹ * ∂σ∂σ²))
+                    push!(return_expr.args, :(∂σ * ∂σ∂σ² - 0.5*$M*σ⁻²))
                 end
             end
         end
@@ -167,9 +241,11 @@ function univariate_normal_quote(
             @fastmath begin
                 $pre_quote
             end
-            @vectorize $T for i ∈ 1:$M
-                $loop_expr
-            end
+            $(macroexpand(ProbabilityDistributions, quote
+                          LoopVectorization.@vvectorize $T for i ∈ 1:$M
+                          $loop_expr
+                          end
+                          end))
             @fastmath begin
                 $(return_expression(return_expr))
             end
@@ -293,7 +369,10 @@ end
                     (track[1], false, track[2]), false, false)
 end
 
-@generated function Normal(y::T, μ::T, σ::T, ::Val{track}) where {T <: Real, track}
+@generated function Normal(
+    y::T, μ::T, σ::T, ::Val{track}
+) where {track, T <: Real}
+#) where {T <: Real, track}
     univariate_normal_quote( 1, T, false, false, false, track, false, true)
 end
 @generated function Normal(
@@ -391,6 +470,8 @@ end
 #    if rem == 0 && reps < VectorizationBase.REGISTER_COUNT - 1
 #        fill_δ = quote end
     quote
+        $(Expr(:meta,:inline))
+
 #=        ss = zero(T)
         @inbounds @fastmath for c ∈ 1:$KT, r ∈ c:$KT
             ss += Σ[r,c]
@@ -447,13 +528,13 @@ end
 # Inlined because of:
 # https://github.com/JuliaLang/julia/issues/32414
 # Stop forcing inlining when the issue is fixed.
-@inline function Normal(sp::StackPointer, Y::NTuple{K}, μ::NTuple{K}, Σ::AbstractFixedSizeCovarianceMatrix{KT,T}, ::Val{track}) where {K, KT, T, track}
-    Wm1 = VectorizationBase.pick_vector_width(KT,T) - 1
+@inline function Normal(sp::StackPointer, Y::NTuple{K}, μ::NTuple{K}, Σ::AbstractFixedSizeCovarianceMatrix{R,T}, ::Val{track}) where {K, R, T, track}
+#    Wm1 = VectorizationBase.pick_vector_width(R,T) - 1
     cols = 0
     @inbounds for k ∈ 1:K
         cols += size(Y[k], 2)
     end
-    δ = DynamicPtrMatrix(pointer(sp, T), (KT, cols), KT)# (KT+Wm1) & ~Wm1)
+    δ = DynamicPtrMatrix(pointer(sp, T), (R, cols), R)# (KT+Wm1) & ~Wm1)
     # return sp, to reuse memory
     sp, Normal!(δ, Y, μ, Σ, Val{track}())
 end
@@ -483,6 +564,7 @@ end
     track_Σ && push!(ret.args, :∂Σ)
     if track_Σ
         q = quote
+            $(Expr(:meta,:inline))
 #=            ss = zero(T)
             @inbounds @fastmath for c ∈ 1:$KT, r ∈ c:$KT
                 ss += Σ[r,c]
@@ -531,6 +613,8 @@ end
         end
     else
         q = quote
+            $(Expr(:meta,:inline))
+
             coffset = 0
             for k ∈ 1:$K
                 Yₖ = Y[k]
@@ -620,14 +704,14 @@ end
     sp::StackPointer,
     Y::NTuple{K},
     μ::NTuple{K},
-    Σ::AbstractFixedSizeCovarianceMatrix{KT,T,KT},
+    Σ::AbstractFixedSizeCovarianceMatrix{R,T,R},
     ::Val{track}
-) where {KT, K, T, track}
+) where {R, K, T, track}
 #) where {K, T, KT, track}
     track_Y, track_μ, track_Σ = track
 #    Wm1 = VectorizationBase.pick_vector_width(KT,T)-1
     #    R = (KT + Wm1) & ~Wm1
-    R = KT
+
     @assert !track_Y
     q = quote
         # Inlined because of:
@@ -652,8 +736,8 @@ end
     # where sp ends up. Ideally, we calculate the best place at compile time
 #    push!(q.args, :((sp, Σ⁻¹δ) = DynamicPtrMatrix{$T}(sp, ($KT,cols), $R)))
     push!(q.args, :(stack_pointer = pointer(sp,$T)))
-    push!(q.args, :(δ = DynamicPtrMatrix(stack_pointer, ($KT, cols), $R)))
-    push!(q.args, :(Σ⁻¹δ = DynamicPtrMatrix(stack_pointer + $(sizeof(T)*R)*cols, ($KT,cols), $R)))
+    push!(q.args, :(δ = DynamicPtrMatrix(stack_pointer, ($R, cols), $R)))
+    push!(q.args, :(Σ⁻¹δ = DynamicPtrMatrix(stack_pointer + $(sizeof(T)*R)*cols, ($R,cols), $R)))
     push!(q.args, :(sp = sp + $(K*sizeof(T)*R) ))
     push!(q.args, :(sp, ∂Normal!(Σ⁻¹δ, δ, Y, μ, Σ, Val{$track}()) ))
     q
@@ -736,7 +820,10 @@ end
 @generated function ∂Normal(y::T, ::Val{track}) where {track,T <: Real}
     univariate_normal_quote(1, T, false, nothing, nothing, (track[1], false, false), true, true)
 end
-@generated function ∂Normal(y::AbstractFixedSizePaddedVector{M,T}, σ::Union{T,Int}, ::Val{track}) where {M, T <: Real, track}
+@generated function ∂Normal(
+    y::AbstractFixedSizePaddedVector{M,T}, σ::Union{T,Int}, ::Val{track}
+#) where {M, T <: Real, track}
+) where {M, track, T <: Real}
     univariate_normal_quote(
                     M, T, true, nothing, false,
                     (track[1], false, track[2]), true, true)
@@ -747,26 +834,34 @@ end
                     (track[1], false, track[2]), true, true)
 end
 @generated function ∂Normal(
-                y::AbstractFixedSizePaddedVector{M,T},
-                σ²::Union{LinearAlgebra.UniformScaling{T},LinearAlgebra.UniformScaling{Int}}, ::Val{track}) where {M, T <: Real, track}
+    y::AbstractFixedSizePaddedVector{M,T},
+    σ²::Union{LinearAlgebra.UniformScaling{T},LinearAlgebra.UniformScaling{Int}}, ::Val{track}
+) where {M, T <: Real, track}
     univariate_normal_quote(
                     M, T, true, nothing, false,
                     (track[1], false, track[2]), true, false)
 end
-@generated function ∂Normal(y::T, σ²::Union{LinearAlgebra.UniformScaling{T},LinearAlgebra.UniformScaling{Int}}, ::Val{track}) where {T <: Real, track}
+@generated function ∂Normal(
+    y::T, σ²::Union{LinearAlgebra.UniformScaling{T},LinearAlgebra.UniformScaling{Int}}, ::Val{track}
+) where {T <: Real, track}
     univariate_normal_quote(
                     1, T, false, nothing, false,
                     (track[1], false, track[2]), true, false)
 end
 
-@generated function ∂Normal(y::T, μ::Union{T,Int}, σ::Union{T,Int}, ::Val{track}) where {T <: Real, track}
+@generated function ∂Normal(
+    y::T, μ::Union{T,Int}, σ::Union{T,Int}, ::Val{track}
+) where {track,T <: Real}
+#) where {T <: Real,track}
     univariate_normal_quote( 1, T, false, false, false, track, true, true)
 end
 @generated function ∂Normal(
-                    y::AbstractFixedSizePaddedVector{M,T},
-                    μ::Union{T,Int,<:AbstractFixedSizePaddedVector{M,T}},
-                    σ::Union{T,Int,<:AbstractFixedSizePaddedVector{M,T}},
-                    ::Val{track}) where {M, T <: Real, track}
+    y::AbstractFixedSizePaddedVector{M,T},
+    μ::Union{T,Int,<:AbstractFixedSizePaddedVector{M,T}},
+    σ::Union{T,Int,<:AbstractFixedSizePaddedVector{M,T}},
+    ::Val{track}
+#) where {M, T <: Real, track}
+) where {M, track, T <: Real}
     univariate_normal_quote( M, T, true,
         μ <: AbstractFixedSizePaddedVector, σ <: AbstractFixedSizePaddedVector, track, true, true)
 end

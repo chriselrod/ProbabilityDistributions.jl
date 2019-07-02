@@ -236,11 +236,11 @@ end
     if track_L && track_η
         quote
 #            out = zero($T)
-            target = vbroadcast(SVec{$(VectorizationBase.pick_vector_width(N-1,T)),$T}, zero($T))
+            target = vbroadcast(Vec{$(VectorizationBase.pick_vector_width(N-1,T)),$T}, zero($T))
             ∂L = MutableFixedSizePaddedVector{$N,$T}(undef)
             @inbounds ∂L[1] = 0
             ∂η = zero($T)
-            @vectorize $T for n ∈ 1:$(N-1)
+            @vvectorize $T for n ∈ 1:$(N-1)
             # @fastmath @inbounds @simd ivdep for n ∈ 1:$(N-1)
                 ∂ηₙ = log(L[n+1])
                 coef = ($(N - 3) - n + 2η)
@@ -248,7 +248,7 @@ end
                 ∂L[n+1] = coef / L[n+1]
                 ∂η += 2∂ηₙ
             end
-            extract_data(target), Diagonal(ConstantFixedSizePaddedVector(∂L)), ∂η
+            target, Diagonal(ConstantFixedSizePaddedVector(∂L)), ∂η
         end
     elseif track_L
         quote
@@ -269,28 +269,28 @@ end
     elseif track_η
         quote
 #            out = zero($T)
-            target = vbroadcast(SVec{$(VectorizationBase.pick_vector_width(N-1,T)),$T}, zero($T))
+            target = vbroadcast(Vec{$(VectorizationBase.pick_vector_width(N-1,T)),$T}, zero($T))
             ∂η = zero($T)
-            @vectorize $T for n ∈ 1:$(N-1)
+            @vvectorize $T for n ∈ 1:$(N-1)
             # @fastmath @inbounds @simd ivdep for n ∈ 1:$(N-1)
                 ∂ηₙ = log(L[n+1])
                 coef = ($(N - 3) - n + 2η)
                 target = vmuladd( coef, ∂ηₙ, target )
                 ∂η += 2∂ηₙ
             end
-            extract_data(target), ∂η
+            target, ∂η
         end
     else
         quote
-            target = vbroadcast(SVec{$(VectorizationBase.pick_vector_width(N-1,T)),$T}, zero($T))
+            target = vbroadcast(Vec{$(VectorizationBase.pick_vector_width(N-1,T)),$T}, zero($T))
 #            out = zero($T)
-            @vectorize $T for n ∈ 1:$(N-1)
+            @vvectorize $T for n ∈ 1:$(N-1)
             # @fastmath @inbounds @simd ivdep for n ∈ 1:$(N-1)
                 ∂ηₙ = log(L[n+1])
                 coef = ($(N - 3) - n + 2η)
                 target = vmuladd( coef, ∂ηₙ, target)
             end
-            extract_data(target)
+            target
         end
     end
 end
@@ -302,12 +302,12 @@ end
             # https://github.com/JuliaLang/julia/issues/32414
             # Stop forcing inlining when the issue is fixed.
             $(Expr(:meta,:inline))
-            target = vbroadcast(SVec{$(VectorizationBase.pick_vector_width(N-1,T)),$T}, zero($T))
+            target = vbroadcast(Vec{$(VectorizationBase.pick_vector_width(N-1,T)),$T}, zero($T))
 #            out = zero($T)
             (sp,∂L) = PtrVector{$N,$T}(sp)
             @inbounds ∂L[1] = 0
             ∂η = zero($T)
-            @vectorize $T for n ∈ 1:$(N-1)
+            @vvectorize $T for n ∈ 1:$(N-1)
             # @fastmath @inbounds @simd ivdep for n ∈ 1:$(N-1)
                 ∂ηₙ = log(L[n+1])
                 coef = ($(N - 3) - n + 2η)
@@ -315,7 +315,7 @@ end
                 ∂L[n+1] = coef / L[n+1]
                 ∂η += 2∂ηₙ
             end
-            sp, (extract_data(target), Diagonal(∂L), ∂η)
+            sp, (target, Diagonal(∂L), ∂η)
         end
     elseif track_L
         quote
@@ -323,7 +323,7 @@ end
             # https://github.com/JuliaLang/julia/issues/32414
             # Stop forcing inlining when the issue is fixed.
             $(Expr(:meta,:inline))
-            target = vbroadcast(SVec{$(VectorizationBase.pick_vector_width(N-1,T)),$T}, zero($T))
+            target = vbroadcast(Vec{$(VectorizationBase.pick_vector_width(N-1,T)),$T}, zero($T))
             #            out = zero($T)
 #            i_init = reinterpret(Int, pointer(sp))
             (sp, ∂L) = PtrVector{$N,$T}(sp)
@@ -331,7 +331,7 @@ end
 #            @show i_final - i_init, $N, typeof(∂L)
             @inbounds ∂L[1] = 0
             ∂η = zero($T)
-            @vectorize $T for n ∈ 1:$(N-1)
+            @vvectorize $T for n ∈ 1:$(N-1)
             # @fastmath @inbounds @simd ivdep for n ∈ 1:$(N-1)
                 ∂ηₙ = log(L[n+1])
                 coef = ($(N - 3) - n + 2η)
@@ -340,7 +340,7 @@ end
             end
 #            println("\nReturning stack pointer:")
 #            @show pointer(sp)
-            sp, (extract_data(target), Diagonal(∂L))
+            sp, (target, Diagonal(∂L))
         end
     elseif track_η
         quote
@@ -348,17 +348,17 @@ end
             # https://github.com/JuliaLang/julia/issues/32414
             # Stop forcing inlining when the issue is fixed.
             $(Expr(:meta,:inline))
-            target = vbroadcast(SVec{$(VectorizationBase.pick_vector_width(N-1,T)),$T}, zero($T))
+            target = vbroadcast(Vec{$(VectorizationBase.pick_vector_width(N-1,T)),$T}, zero($T))
 #            out = zero($T)
             ∂η = zero($T)
-            @vectorize $T for n ∈ 1:$(N-1)
+            @vvectorize $T for n ∈ 1:$(N-1)
             # @fastmath @inbounds @simd ivdep for n ∈ 1:$(N-1)
                 ∂ηₙ = log(L[n+1])
                 coef = ($(N - 3) - n + 2η)
                 target = vmuladd(coef, ∂ηₙ, target)
                 ∂η += 2∂ηₙ
             end
-            sp, (extract_data(target), ∂η)
+            sp, (target, ∂η)
         end
     else
         quote
@@ -366,15 +366,15 @@ end
             # https://github.com/JuliaLang/julia/issues/32414
             # Stop forcing inlining when the issue is fixed.
             $(Expr(:meta,:inline))
-            target = vbroadcast(SVec{$(VectorizationBase.pick_vector_width(N-1,T)),$T}, zero($T))
+            target = vbroadcast(Vec{$(VectorizationBase.pick_vector_width(N-1,T)),$T}, zero($T))
 #            out = zero($T)
-            @vectorize $T for n ∈ 1:$(N-1)
+            @vvectorize $T for n ∈ 1:$(N-1)
             # @fastmath @inbounds @simd ivdep for n ∈ 1:$(N-1)
                 ∂ηₙ = log(L[n+1])
                 coef = ($(N - 3) - n + 2η)
                 target = vmuladd(coef, ∂ηₙ, target)
             end
-            sp, extract_data(target)
+            sp, target
         end
     end
 end
