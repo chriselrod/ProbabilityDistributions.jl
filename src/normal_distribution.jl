@@ -434,7 +434,7 @@ function logdet_triangle(A::AbstractMatrix{T}) where {T}
     end
     out
 end
-function vlogdet_triangle(A::AbstractMatrix{T}) where {T}
+@inline function vlogdet_triangle(A::AbstractMatrix{T}) where {T}
     N = size(A,1)
     W, Wshift = VectorizationBase.pick_vector_width_shift(T)
     Nrep = N >> Wshift

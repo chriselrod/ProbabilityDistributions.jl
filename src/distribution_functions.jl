@@ -1015,6 +1015,27 @@ end
 end
 push!(DISTRIBUTION_DIFF_RULES, :lsgg)
 
+#= 
 
+function multinomial_quote(M, isvararg::Bool, T)
+    q = quote end
+    W, Wshift = VectorizationBase.pick_vector_width_shift(M, T)
+    Wm1 = W - 1
+    niter = M >> Wshift
+    nrem = (M + Wm1) & Wm1
+    if isvararg
+        push!(q.args, :(target = SIMDPirates.vmul(y, SLEEFPirates.log()) ))
+        for i ∈ 1:niter-1
+            push!(q.args, :( ))
+        end
 
+    else
+        for i ∈ 0:niter-1
+            
+        end
+    end
 
+end
+
+ 
+=#
