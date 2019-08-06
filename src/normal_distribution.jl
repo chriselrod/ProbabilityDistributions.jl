@@ -550,10 +550,6 @@ end
 ) where {T, K, P, R, V <: PaddedMatrices.AbstractFixedSizePaddedVector{P,T}, KT, track}
     W, Wshift = VectorizationBase.pick_vector_width_shift(P, T)
     track_Y, track_μ, track_Σ = track
-#    track_μ = ∂μ != Nothing
-#    track_Σ = ∂Σ != Nothing
-#    track_Y, track_μ, track_Σ = track
-#    @assert track_Y == false
     if !(track_μ | track_Σ)
         ret = :target
     else
@@ -565,12 +561,6 @@ end
     if track_Σ
         q = quote
             $(Expr(:meta,:inline))
-#=            ss = zero(T)
-            @inbounds @fastmath for c ∈ 1:$KT, r ∈ c:$KT
-                ss += Σ[r,c]
-            end
-            return (sum(μ[1]) + sum(μ[2]) + ss), DistributionParameters.One(), DistributionParameters.One()=#
-
             
             coffset = 0
             for k ∈ 1:$K
@@ -643,35 +633,16 @@ end
             target = extract_data(starget)
         end
     end
-    
-#=    if track_Y
-    # Need to make these negative. Figure out best way to handle stack pointers.
-        ∂μq = Expr(:tuple,)
+    if track_μ || track_Y
+        track_Y && (∂Yq = Expr(:tuple,))
+        track_μ && (∂μq = Expr(:tuple,))
         push!(q.args, :(coffset = 0))
-        for k ∈ 1:K
-            ∂μₖ = Symbol(:∂μ_, k)
-            push!(∂μq.args, ∂μₖ)
-            push!(q.args, quote
-                  ncol = size(Y[$k],2)
-                  $∂μₖ = view( Σ⁻¹δ, :, coffset+1:coffset+ncol )
-                  coffset += ncol
-                  end)
-        end
-        push!(q.args, :(∂μ = $∂μq))
-    end =#
-    if track_μ
-        ∂μq = Expr(:tuple,)
-        push!(q.args, :(coffset = 0))
-        @assert !track_Y
-        # Note that Σ⁻¹δ would be ∂Yₖ
-        # so once we support that, we'll instead
-        # of overwriting the first columns of δ
-        # we'll write after the end of the array.
         push!(q.args, :(ptr_δ = pointer(δ)))
         for k ∈ 1:K
-            ∂μₖ = Symbol(:∂μ_, k)
             ∂Yₖ = Symbol(:∂Y_, k)
-            push!(∂μq.args, ∂μₖ)
+            ∂μₖ = Symbol(:∂μ_, k)
+            track_Y && push!(∂Yq.args, ∂Yₖ)
+            track_μ && push!(∂μq.args, ∂μₖ)
             push!(q.args, quote
                   ncol = size(Y[$k],2)
                   $∂Yₖ = view( Σ⁻¹δ, :, coffset+1:coffset+ncol )
@@ -680,7 +651,8 @@ end
                   coffset += ncol
                   end)
         end
-        push!(q.args, :(∂μ = $∂μq))
+        track_Y && push!(q.args, :(∂Y = $∂Yq))
+        track_μ && push!(q.args, :(∂μ = $∂μq))
     end
     if track_Σ
         push!(q.args, quote
@@ -709,10 +681,7 @@ end
 ) where {R, K, T, track}
 #) where {K, T, KT, track}
     track_Y, track_μ, track_Σ = track
-#    Wm1 = VectorizationBase.pick_vector_width(KT,T)-1
-    #    R = (KT + Wm1) & ~Wm1
 
-    @assert !track_Y
     q = quote
         # Inlined because of:
         # https://github.com/JuliaLang/julia/issues/32414
@@ -724,21 +693,26 @@ end
             cols += size(Y[k], 2)
         end
     end
-#    if track_Σ
-#        push!(q.args, :((sp, ∂Σ) = DistributionParameters.PtrFixedSizeCovarianceMatrix{$KT,$T}(sp)))#, ($KT,$KT), $((KT+Wm1) & ~Wm1))))
-##        push!(q.args, :((sp, ∂Σ) = PtrMatrix{$KT,$T}(sp)))#, ($KT,$KT), $((KT+Wm1) & ~Wm1))))
-##        push!(q.args, :((sp, ∂Σ) = DynamicPtrMatrix{$T}(sp, ($KT,$KT), $((KT+Wm1) & ~Wm1))))
-#    else
-#        push!(q.args, :(∂Σ = nothing))
-#    end
-    # This needs to be changed once we add support for track_Y == true
-    # once we do that, we'll have to change where the pointers go, and
-    # where sp ends up. Ideally, we calculate the best place at compile time
-#    push!(q.args, :((sp, Σ⁻¹δ) = DynamicPtrMatrix{$T}(sp, ($KT,cols), $R)))
     push!(q.args, :(stack_pointer = pointer(sp,$T)))
-    push!(q.args, :(δ = DynamicPtrMatrix(stack_pointer, ($R, cols), $R)))
-    push!(q.args, :(Σ⁻¹δ = DynamicPtrMatrix(stack_pointer + $(sizeof(T)*R)*cols, ($R,cols), $R)))
-    push!(q.args, :(sp = sp + $(K*sizeof(T)*R) ))
+    if track_Y
+        # We are tracking Y, so we cannot drop Σ⁻¹δ, because this will be returned as ∂Yₖ
+        push!(q.args, :(Σ⁻¹δ = DynamicPtrMatrix(stack_pointer, ($R,cols), $R)))
+        push!(q.args, :(stack_pointer += $(sizeof(T)*R)*cols))
+        push!(q.args, :(δ = DynamicPtrMatrix(stack_pointer, ($R, cols), $R)))
+    else
+        # because we are not tracking Y, we can drop Σ⁻¹δ, which will contain ∂Y
+        # we therefore allocate it on top of δ on the stack.
+        push!(q.args, :(δ = DynamicPtrMatrix(stack_pointer, ($R, cols), $R)))
+        push!(q.args, :(stack_pointer += $(sizeof(T)*R)*cols))
+        push!(q.args, :(Σ⁻¹δ = DynamicPtrMatrix(stack_pointer, ($R,cols), $R)))
+    end
+    if track_μ && track_Y
+        push!(q.args, :(sp = PaddedMatrices.StackPointer(Base.unsafe_convert(Ptr{Cvoid}, stack_pointer + $(K*sizeof(T)*R)) )))
+    elseif track_μ
+        push!(q.args, :(sp = sp + $(K*sizeof(T)*R) ))
+    elseif track_Y
+        push!(q.args, :(sp = PaddedMatrices.StackPointer(Base.unsafe_convert(Ptr{Cvoid}, stack_pointer) )))
+    end
     push!(q.args, :(sp, ∂Normal!(Σ⁻¹δ, δ, Y, μ, Σ, Val{$track}()) ))
     q
 end
