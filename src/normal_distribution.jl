@@ -466,18 +466,8 @@ end
 ) where {T, K, P, V <: PaddedMatrices.AbstractFixedSizePaddedVector{P,T}, KT, track}
     W, Wshift = VectorizationBase.pick_vector_width_shift(P, T)
     track_Y, track_μ, track_Σ = track
-#    reps, rem = divrem(P, W)
-#    if rem == 0 && reps < VectorizationBase.REGISTER_COUNT - 1
-#        fill_δ = quote end
     quote
         $(Expr(:meta,:inline))
-
-#=        ss = zero(T)
-        @inbounds @fastmath for c ∈ 1:$KT, r ∈ c:$KT
-            ss += Σ[r,c]
-        end
-        return sum(μ[1]) + sum(μ[2]) + ss=#
-
 
         coffset = 0
         for k ∈ 1:$K
@@ -497,22 +487,6 @@ end
         L = Σ#.data
         LinearAlgebra.LAPACK.potrf!('L', L)
         LinearAlgebra.LAPACK.trtrs!('L', 'N', 'N', L, δ)
-        #=
-        Base.Cartesian.@nexprs 4 j -> target_j = SIMDPirates.vbroadcast(Vec{$(VectorizationBase.pick_vector_width(KT,T)),$T}, zero($T))
-        δ_ptr = pointer(δ)
-        Nδ = length(δ)
-        for i ∈ 0:Nδ >> $(Wshift + 2) - 1
-            Base.Cartesian.@nexprs 4 j -> begin
-                vδ_j = SIMDPirates.vload(Vec{$W,$T}, δ_ptr + $(sizeof(T)*W) * ((j-1)+4i) )
-                target_j = vmuladd( vδ_j, vδ_j, target )
-            end
-#            target = SIMDPirates.vmuladd( δ[i], δ[i], target )
-        end
-        for i ∈ 
-        target_1 = vadd(target_1, target_3)
-        target_2 = vadd(target_2, target_4)
-            target = vadd(target_1, target_2)
-        =#
         
         starget = vbroadcast(SVec{$(VectorizationBase.pick_vector_width(T)),T}, zero($T))
         @vectorize for i ∈ 1:length(δ)
@@ -538,6 +512,17 @@ end
     # return sp, to reuse memory
     sp, Normal!(δ, Y, μ, Σ, Val{track}())
 end
+@inline function Normal(
+    sp::StackPointer,
+    Y::AbstractMatrix{T},
+    μ::PaddedMatrices.AbstractFixedSizePaddedVector{R,T},
+    Σ::AbstractFixedSizeCovarianceMatrix{R,T},
+    ::Val{track}
+) where {R,T,track}
+    Normal(sp, (Y,), (μ,), Σ, Val{track}())
+end
+
+    
 @generated function ∂Normal!(
 #    ∂μ::Union{Nothing,NTuple{K,V}},
 #    ∂Σ::Union{Nothing,AbstractMatrix{T}},
@@ -550,10 +535,10 @@ end
 ) where {T, K, P, R, V <: PaddedMatrices.AbstractFixedSizePaddedVector{P,T}, KT, track}
     W, Wshift = VectorizationBase.pick_vector_width_shift(P, T)
     track_Y, track_μ, track_Σ = track
-    if !(track_μ | track_Σ)
-        ret = :target
-    else
+    if any((track_Y, track_μ, track_Σ))
         ret = Expr(:tuple, :target)
+    else
+        ret = :target
     end
     track_Y && push!(ret.args, :∂Y)
     track_μ && push!(ret.args, :∂μ)
@@ -572,7 +557,7 @@ end
                 # so, I figured I'd go for smaller code size.
                 for c ∈ 1:ncol
 #                for p ∈ 1:$P
-                    @vectorize $T for p ∈ 1:$P
+                    @vvectorize $T for p ∈ 1:$P
                         δₚ = μₖ[p] - Yₖ[p,c]
                         δ[p,c+coffset] = δₚ
 #                        Σ⁻¹δ[p,c+coffset] = δₚ
@@ -584,10 +569,8 @@ end
             if info != 0
                 ∂Σ = Σ
                 ptr_δ = pointer(δ)
-                $(track_μ ? Expr(:(=), :∂μ, Expr(:tuple, [:(PtrVector{$P,$T,$R,$R}( ptr_δ + $(sizeof(T)*R*(k-1)) )) for k ∈ 1:K]...)) : nothing)
-                # TODO: support track_Y
-   #             $(track_Y ? :() : nothing)
-                target = vbroadcast(Vec{$W,$T}, $(T(-Inf)))
+#                $(track_μ ? Expr(:(=), :∂μ, Expr(:tuple, [:(PtrVector{$P,$T,$R,$R}( ptr_δ + $(sizeof(T)*R*(k-1)) )) for k ∈ 1:K]...)) : nothing)
+                target = vbroadcast(Vec{$W,$T}, $(typemin(T)))
                 return $ret
             end
             logdetL = vlogdet_triangle(L)
@@ -596,7 +579,7 @@ end
             LinearAlgebra.BLAS.symm!('L', 'L', one($T), Σ, δ, zero($T), Σ⁻¹δ)
 #            LinearAlgebra.LAPACK.potrs!('L', L, Σ⁻¹δ)
             starget = vbroadcast(SVec{$(VectorizationBase.pick_vector_width(T)),$T}, zero($T))
-            @vectorize for i ∈ 1:length(δ)
+            @vvectorize for i ∈ 1:length(δ)
                 starget = vmuladd( Σ⁻¹δ[i], δ[i], starget )
             end
             target = extract_data(starget)
@@ -614,8 +597,7 @@ end
                 # but performance difference seemed negligible in benchmarks
                 # so, I figured I'd go for smaller code size.
                 for c ∈ 1:ncol
-#                for p ∈ 1:$P
-                    @vectorize $T for p ∈ 1:$P
+                    @vvectorize $T for p ∈ 1:$P
                         δₚ = μₖ[p] - Yₖ[p,c]
                         δ[p,c+coffset] = δₚ
                         Σ⁻¹δ[p,c+coffset] = δₚ
@@ -627,7 +609,7 @@ end
             LinearAlgebra.LAPACK.potrf!('L', Σ)
             LinearAlgebra.LAPACK.potrs!('L', L, Σ⁻¹δ)
             starget = vbroadcast(SVec{$(VectorizationBase.pick_vector_width(T)),$T}, zero($T))
-            @vectorize for i ∈ 1:length(δ)
+            @vvectorize for i ∈ 1:length(δ)
                 starget = vmuladd( Σ⁻¹δ[i], δ[i], starget )
             end
             target = extract_data(starget)
@@ -717,76 +699,68 @@ end
     q
 end
 
-#=
-
-function Normal(δ::AbstractPaddedMatrix{T}, Y::NTuple{K}, μ::NTuple{K}, Σ::DynamicCovarianceMatrix{T}, ::Val{track}) where {T, K, track}
-    track_Y, track_Σ = track
-    target = zero(T)
-    U = cholesky!(Σ).U
-    U⁻¹Y = U \ Y
-    @inbounds @simd for i ∈ eachindex(U⁻¹Y)
-        target += U⁻¹Y[i] * U⁻¹Y[i]
-        end
-    if track_Σ
-        return muladd(-0.5, target,  - size(Y,2) * logdet(U))
-    else
-        return -0.5target
+@generated function ∂Normal(
+    sp::StackPointer,
+    Y::AbstractMatrix{T},
+    μ::AbstractFixedSizePaddedVector{R,T},
+    Σ::AbstractFixedSizeCovarianceMatrix{R,T,R},
+    ::Val{track}
+) where {R, K, T, track}
+    track_Y, track_μ, track_Σ = track
+    ∂retin = Expr(:tuple,:target)
+    ∂retout = Expr(:tuple,:target)
+    track_Y && push!(∂retin.args, :∂Y)
+    track_μ && push!(∂retin.args, :∂μ)
+    track_Σ && push!(∂retin.args, :∂Σ)
+    track_Y && push!(∂retout.args, :(∂Y[1]))
+    track_μ && push!(∂retout.args, :(∂μ[1]))
+    track_Σ && push!(∂retout.args, :∂Σ)
+    quote
+        $(Expr(:meta,:inline))
+        (sp, $∂retin) = ∂Normal(sp, (Y,), (μ,), Σ, Val{$track}())
+        @inbounds (sp, $∂retout)
     end
 end
-function Normal(Y::NTuple{N,MultivariateNormalVariate{T}}, Σ::DynamicCovarianceMatrix{T}, ::Val{track}) where {N, T, track}
-    track_Y, track_Σ = track
-    U = cholesky!(Σ).U
-    target = zero(T)
-    Ny = 0
-    for n ∈ 1:N
-        Ny -= size(Y[n], 2)
-        U⁻¹Y = U \ Y[n]
-        @inbounds @simd for i ∈ eachindex(U⁻¹Y)
-            target += U⁻¹Y[i] * U⁻¹Y[i]
-        end
-    end
-    if track_Σ
-        return muladd(-0.5, target, Ny*logdet_triangle(U))
-    else
-        return -0.5target
-    end
+@inline function Normalc(
+    sp::StackPointer,
+    Y, μ,
+    Σ::AbstractFixedSizeCovarianceMatrix{R,T,R},
+    ::Val{track}
+) where {R, K, T, track}
+    Σcopy = DistributionParameters.MutableFixedSizeCovarianceMatrix{R,T,R}(undef)
+    copyto!(Σcopy, Σ)
+    Normal(sp, Y, μ, Σcopy, Val{track}())
 end
-
-
-
-function ∂Normal(Y::MultivariateNormalVariate{T}, Σ::DynamicCovarianceMatrix{T}, ::Val{(true,true)}) where {T}
-    cholΣ = cholesky!(Σ)
-    target = zero(T)
-    Ny = 0
-
-    Ny -= size(Y, 2)
-    δ = Y.δ
-    Σ⁻¹δ = cholΣ \ Y
-    @fastmath @inbounds @simd ivdep for i ∈ eachindex(Σ⁻¹δ)
-        target += δ[i] * Σ⁻¹δ[i]
-    end
-    LinearAlgebra.BLAS.syrk!('L', 'N', T(0.5), Σ⁻¹δ.data, zero(T), Σ.∂Σ)
-    
-    muladd(-0.5, target, -size(Y, 2)*logdet_triangle(cholΣ)), Y.Σ⁻¹δ, Σ.∂Σ
+@inline function Normalc(
+    sp::StackPointer,
+    Y, μ,
+    Σ::AbstractFixedSizeCovarianceMatrix{R,T,R},
+    Σcopy::AbstractFixedSizeCovarianceMatrix{R,T,R},
+    ::Val{track}
+) where {R, K, T, track}
+    copyto!(Σcopy, Σ)
+    Normal(sp, Y, μ, Σcopy, Val{track}())
 end
-function ∂Normal(Y::NTuple{N,MultivariateNormalVariate{T}}, Σ::DynamicCovarianceMatrix{T}, ::Val{(true,true)}) where {N, T}
-    
-    cholΣ = cholesky!(Σ)
-    target = zero(T)
-    Ny = 0
-    for n ∈ 1:N
-        Ny -= size(Y[n], 2)
-        δ = Y[n].δ
-        Σ⁻¹δ = cholΣ \ Y[n]
-        @fastmath @inbounds @simd ivdep for i ∈ eachindex(Σ⁻¹δ)
-            target += δ[i] * Σ⁻¹δ[i]
-        end
-        LinearAlgebra.BLAS.syrk!('L', 'N', T(0.5), Σ⁻¹δ, (n == 1 ? zero(T) : one(T)), Σ.∂Σ)
-    end
-    
-    muladd(-0.5, target, Ny*logdet_triangle(cholΣ)), ntuple(n -> Y[n].Σ⁻¹δ, Val(N)), Σ.∂Σ
+@inline function ∂Normalc(
+    sp::StackPointer,
+    Y, μ,
+    Σ::AbstractFixedSizeCovarianceMatrix{R,T,R},
+    ::Val{track}
+) where {R, K, T, track}
+    Σcopy = DistributionParameters.MutableFixedSizeCovarianceMatrix{R,T,R}(undef)
+    copyto!(Σcopy, Σ)
+    ∂Normal(sp, Y, μ, Σcopy, Val{track}())
 end
-=#
+@inline function ∂Normalc(
+    sp::StackPointer,
+    Y, μ,
+    Σ::AbstractFixedSizeCovarianceMatrix{R,T,R},
+    Σcopy::AbstractFixedSizeCovarianceMatrix{R,T,R},
+    ::Val{track}
+) where {R, K, T, track}
+    copyto!(Σcopy, Σ)
+    ∂Normal(sp, Y, μ, Σcopy, Val{track}())
+end
 
 @generated function ∂Normal(y::AbstractFixedSizePaddedVector{M,T}, ::Val{track}) where {M,T,track}
     univariate_normal_quote( M, T, true, nothing, nothing, (track[1], false, false), true, true)
