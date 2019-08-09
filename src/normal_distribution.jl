@@ -543,70 +543,84 @@ end
     track_Y && push!(ret.args, :∂Y)
     track_μ && push!(ret.args, :∂μ)
     track_Σ && push!(ret.args, :∂Σ)
+
+
+    q = quote
+        $(Expr(:meta,:inline)) # work-around for SIMD-corruption bug
+        coloffset_0 = 0
+        ptr_δ = pointer(δ)
+    end
+    for k ∈ 1:K
+        setup_quote = quote
+            @inbounds $(Symbol(:Y_,k)) = Y[$k]
+            #                @inbounds $(Symbol(:μ_,k)) = μ[$k]
+            $(Symbol(:ncol_,k)) = size($(Symbol(:Y_,k)),2)
+            $(Symbol(:coloffset_,k)) = $(Symbol(:coloffset_,k-1)) + $(Symbol(:ncol_,k))
+            $(Symbol(:∂Y_,k)) = view( Σ⁻¹δ, :, $(Symbol(:coloffset_,k-1))+1:$(Symbol(:coloffset_,k)) )
+            $(Symbol(:∂μ_,k)) = PtrVector{$P,$T,$R,$R}( ptr_δ + $(sizeof(T)*R*(k-1)))
+        end
+        push!(q.args, setup_quote)
+    end
+    track_Y && push!(q.args, Expr(:(=), :∂Y, Expr(:tuple, [Symbol(:∂Y_,k) for k ∈ 1:K]...)))
+    track_μ && push!(q.args, Expr(:(=), :∂μ, Expr(:tuple, [Symbol(:∂μ_,k) for k ∈ 1:K]...)))
+    push!(q.args, Expr(:(=), :ncoltup, Expr(:tuple, [Symbol(:ncol_,k) for k ∈ 1:K]...)))
+    push!(q.args, Expr(:(=), :coloffsettup, Expr(:tuple, [Symbol(:coloffset_,k-1) for k ∈ 1:K+1]...)))
     if track_Σ
-        q = quote
-            $(Expr(:meta,:inline))
-            
-            coffset = 0
-            for k ∈ 1:$K
-                Yₖ = Y[k]
-                μₖ = μ[k]
-                ncol = size(Yₖ, 2)
-                # Could avoid reloading μₖ
-                # but performance difference seemed negligible in benchmarks
-                # so, I figured I'd go for smaller code size.
-                for c ∈ 1:ncol
-#                for p ∈ 1:$P
-                    @vvectorize $T for p ∈ 1:$P
-                        δₚ = μₖ[p] - Yₖ[p,c]
-                        δ[p,c+coffset] = δₚ
-#                        Σ⁻¹δ[p,c+coffset] = δₚ
-                    end
-                end
-                coffset += ncol
-            end
-            L, info = LinearAlgebra.LAPACK.potrf!('L', Σ)
+        # if first real calculation fails, abort
+        cholesky_check_quote = quote
+            L, info = LinearAlgebra.LAPACK.potrf!('L', Σ) # Cholesky factor
             if info != 0
                 ∂Σ = Σ
-                ptr_δ = pointer(δ)
-#                $(track_μ ? Expr(:(=), :∂μ, Expr(:tuple, [:(PtrVector{$P,$T,$R,$R}( ptr_δ + $(sizeof(T)*R*(k-1)) )) for k ∈ 1:K]...)) : nothing)
                 target = vbroadcast(Vec{$W,$T}, $(typemin(T)))
                 return $ret
             end
+            # while still hot in memory, we proceed to calculate the determinant and inverse
             logdetL = vlogdet_triangle(L)
             Σ⁻¹ = L
-            LinearAlgebra.LAPACK.potri!('L', Σ⁻¹)
+            LinearAlgebra.LAPACK.potri!('L', Σ⁻¹) # calculates Σ⁻¹ from cholesky factor of Σ
+        end
+        push!(q.args, cholesky_check_quote)
+        δloopquote = quote
+            @inbounds for k ∈ 1:$K
+                Yₖ = Y[k]
+                μₖ = μ[k]
+                for c ∈ 1:ncoltup[k]
+                    coffset = c + coloffsettup[k]
+                    @vvectorize $T for p ∈ 1:$P
+                        δ[p,coffset] = μₖ[p] - Yₖ[p,c]
+                    end
+                end
+            end
+        end
+        push!(q.args, δloopquote)
+        target_calc_quote = quote
             LinearAlgebra.BLAS.symm!('L', 'L', one($T), Σ, δ, zero($T), Σ⁻¹δ)
-#            LinearAlgebra.LAPACK.potrs!('L', L, Σ⁻¹δ)
             starget = vbroadcast(SVec{$(VectorizationBase.pick_vector_width(T)),$T}, zero($T))
             @vvectorize for i ∈ 1:length(δ)
                 starget = vmuladd( Σ⁻¹δ[i], δ[i], starget )
             end
             target = extract_data(starget)
         end
+        push!(q.args, target_calc_quote)
     else
-        q = quote
-            $(Expr(:meta,:inline))
-
-            coffset = 0
-            for k ∈ 1:$K
+        δloopquote = quote
+            @inbounds for k ∈ 1:$K
                 Yₖ = Y[k]
                 μₖ = μ[k]
-                ncol = size(Yₖ, 2)
-                # Could avoid reloading μₖ
-                # but performance difference seemed negligible in benchmarks
-                # so, I figured I'd go for smaller code size.
-                for c ∈ 1:ncol
+                for c ∈ 1:ncoltup[k]
+                    coffset = c + coloffsettup[k]
                     @vvectorize $T for p ∈ 1:$P
                         δₚ = μₖ[p] - Yₖ[p,c]
-                        δ[p,c+coffset] = δₚ
-                        Σ⁻¹δ[p,c+coffset] = δₚ
+                        δ[p,coffset] = δₚ
+                        Σ⁻¹δ[p,coffset] = δₚ
                     end
                 end
-                coffset += ncol
             end
+        end
+        push!(q.args, δloopquote)
+        target_calc_quote = quote
             L = Σ#.data
-            LinearAlgebra.LAPACK.potrf!('L', Σ)
+            LinearAlgebra.LAPACK.potrf!('L', Σ) # really? We're assuming it is constant here...
             LinearAlgebra.LAPACK.potrs!('L', L, Σ⁻¹δ)
             starget = vbroadcast(SVec{$(VectorizationBase.pick_vector_width(T)),$T}, zero($T))
             @vvectorize for i ∈ 1:length(δ)
@@ -616,29 +630,15 @@ end
         end
     end
     if track_μ || track_Y
-        track_Y && (∂Yq = Expr(:tuple,))
-        track_μ && (∂μq = Expr(:tuple,))
-        push!(q.args, :(coffset = 0))
-        push!(q.args, :(ptr_δ = pointer(δ)))
         for k ∈ 1:K
             ∂Yₖ = Symbol(:∂Y_, k)
             ∂μₖ = Symbol(:∂μ_, k)
-            track_Y && push!(∂Yq.args, ∂Yₖ)
-            track_μ && push!(∂μq.args, ∂μₖ)
-            push!(q.args, quote
-                  ncol = size(Y[$k],2)
-                  $∂Yₖ = view( Σ⁻¹δ, :, coffset+1:coffset+ncol )
-                  $∂μₖ = PtrVector{$P,$T,$R,$R}( ptr_δ + $(sizeof(T)*R*(k-1)) ) #view( Σ⁻¹δ, :, coffset+1:coffset+ncol )
-                  PaddedMatrices.negative_sum!($∂μₖ, $∂Yₖ)
-                  coffset += ncol
-                  end)
+            push!(q.args, :( PaddedMatrices.negative_sum!($∂μₖ, $∂Yₖ) ))
         end
-        track_Y && push!(q.args, :(∂Y = $∂Yq))
-        track_μ && push!(q.args, :(∂μ = $∂μq))
     end
     if track_Σ
         push!(q.args, quote
-              ldfactor = -one($T)*coffset
+              ldfactor = -one($T)*$(Symbol(:coloffset_,K))
               ∂Σ = Σ⁻¹
               LinearAlgebra.BLAS.syrk!('L', 'N', one($T), Σ⁻¹δ, ldfactor, ∂Σ)
 #              LinearAlgebra.BLAS.syrk!('L', 'N', $(T(0.5)), Σ⁻¹δ, $(T(0.5)) * ldfactor, ∂Σ)
