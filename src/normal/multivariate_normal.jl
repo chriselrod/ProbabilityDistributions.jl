@@ -377,13 +377,15 @@ function loadδ_quote(R, C, K::Union{Symbol,Int}, T::DataType, Bstride, Bsym, μ
 end
 
 function mutlivariate_normal_SMLT_rowiter(Mk, Nk, col_rem, T, Ystride, n_col_reps, μsym = :μptr)
+    #TODO: NOTE, WE DO NEED TO STORE THE SOLUTION MATRIX (at least 1 row set amd up to the last column block)
+    # because this is used for calculating the next iteration.
     N = Nk * n_col_reps + col_rem
     size_T = sizeof(T)
     row_iter = quote end
     if col_rem > 0
         loadδ_expr = loadδ_quote(Mk, col_rem, 0, T, Ystride, :Yptr, μsym)
         iter_quote = StructuredMatrices.A_rdiv_U_kernel_quote(
-            Mk, col_rem, 0, T, Ystride, Ystride, N, true, true, storeA = false, loadB = false, reduce_sym = :δ²
+            Mk, col_rem, 0, T, Mk, Ystride, N, true, true, storeA = true, loadB = false, reduce_sym = :δ²
         )
         #pushfirst!(row_iter.args, :(ptrUtri = ptrUtribase))
         push!(row_iter.args, iter_quote)
@@ -397,7 +399,7 @@ function mutlivariate_normal_SMLT_rowiter(Mk, Nk, col_rem, T, Ystride, n_col_rep
     if n_col_reps > 1
         loadδ_expr = loadδ_quote(Mk, Nk, 0, T, Ystride, :Yptr, μsym)
         iterquote = StructuredMatrices.A_rdiv_U_kernel_quote(
-            Mk, Nk, :K, T, Ystride, Ystride, N, true, true, storeA = false, loadB = false, reduceA = true, reduce_sym = :δ²
+            Mk, Nk, :K, T, Mk, Ystride, N, true, true, storeA = true, loadB = false, reduceA = true, reduce_sym = :δ²
         )
         row_iter_loop = quote
             K = $base_K
@@ -412,7 +414,7 @@ function mutlivariate_normal_SMLT_rowiter(Mk, Nk, col_rem, T, Ystride, n_col_rep
         push!(row_iter.args, row_iter_loop)
     elseif n_col_reps == 1
         row_iter_single = StructuredMatrices.A_rdiv_U_kernel_quote(
-            Mk, Nk, col_rem, T, Ystride, Ystride, N, true, true, storeA = false, loadB = false, reduceA = true, reduce_sym = :δ²
+            Mk, Nk, col_rem, T, Mk, Ystride, N, true, true, storeA = false, loadB = false, reduceA = true, reduce_sym = :δ²
         )
         push!(row_iter.args, row_iter_single)
     end
@@ -445,6 +447,8 @@ function multivariate_normal_SMLT_quote(M::Union{Symbol,Integer}, P, track, sp::
         LoopVectorization.@vvectorize $T for p ∈ 1:$P
             $loopbody
         end
+        A = $(sp ? :(PtrMatrix{$Mk,$P,$T,$Mk}(pointer(sptr,$T) + $(VectorizationBase.align(size_T*P)))) : :(MutableFixedSizePaddedMatrix{$Mk,$P,$T,$Mk}(undef)))
+        ptrA = pointer(A)
         ptrB = pointer(Y)
         ptrUtribase = pointer(L) + $(P*size_T)
     end
@@ -462,7 +466,7 @@ function multivariate_normal_SMLT_quote(M::Union{Symbol,Integer}, P, track, sp::
                     ptrUtri = ptrUtribase#pointer(B) + $(size_T * N)
                     $row_iter
                     ptrB += $(size_T*Mk)
-                    ptrA += $(size_T*Mk)
+                    #ptrA += $(size_T*Mk)
                 end
             end
             push!(q.args, row_loops)
@@ -493,12 +497,14 @@ function multivariate_normal_SMLT_quote(M::Union{Symbol,Integer}, P, track, sp::
                 ptrUtri = ptrUtribase#pointer(B) + $(size_T * N)
                 $row_iter
                 ptrB += $(size_T*Mk)
+                #ptrA += $(size_T*Mk)
             end
             for rrep ∈ 1:Mkrem >> $(VectorizationBase.intlog2(W))
                 ptrUdiag = pointer(invdiag)
                 ptrUtri = ptrUtribase#pointer(B) + $(size_T * N)
                 $row_iter_onevec
                 ptrB += $(size_T*W)
+                #ptrA += $(size_T*W)
             end
             row_rem_final = Mkrem & $Wm1
             $row_iter_onevecmask
