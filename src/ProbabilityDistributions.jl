@@ -22,7 +22,9 @@ function return_expression(return_expr, sp)
 end
 
 include("distribution_functions.jl")
-include("normal_distribution.jl")
+include("normal/univariate_normal.jl")
+include("normal/multivariate_normal.jl")
+include("normal/matrix_normal.jl")
 
 const STACK_POINTER_SUPPORTED_METHODS = Set{Symbol}()
 PaddedMatrices.@support_stack_pointer ∂lsgg
