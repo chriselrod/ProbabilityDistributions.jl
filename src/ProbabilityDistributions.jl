@@ -5,9 +5,10 @@ using   SIMDPirates, SLEEFPirates, SpecialFunctions, DistributionParameters,
         VectorizationBase, LoopVectorization
 
 using PaddedMatrices: StackPointer, DynamicPtrMatrix,
-    AbstractFixedSizePaddedVector, AbstractFixedSizePaddedMatrix, AbstractPaddedMatrix
+    AbstractFixedSizePaddedVector, AbstractFixedSizePaddedMatrix, AbstractPaddedMatrix,
+    AbstractMutableFixedSizePaddedVector, AbstractMutableFixedSizePaddedMatrix
 using ScatteredArrays: AbstractScatteredArray
-using StructuredMatrices: AbstractAutoregressiveMatrix
+using StructuredMatrices: AbstractAutoregressiveMatrix, AbstractLowerTriangularMatrix
 using DistributionParameters: AbstractLKJCorrCholesky
 using SIMDPirates: extract_data, vbroadcast, vadd, vsub, vfnmadd, vfmsub, vfnmsub, vsum, vload, vstore!
 using VectorizationBase: pick_vector_width, pick_vector_width_shift
