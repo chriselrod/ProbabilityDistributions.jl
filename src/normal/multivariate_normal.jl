@@ -743,7 +743,7 @@ function loop_pointer_increments(track_Y, track_μ, track_L, Nk, Nk2, K, size_T,
         end
     end
     if track_μ
-        push!(loop_ptr_increments.args, Expr(:(-=), :ptrv∂μ, Nk*size_T))
+        push!(loop_ptr_increments.args, Expr(:(-=), :ptrv∂μ, Nk*size_T*W))
     end
     if track_L
         push!(loop_ptr_increments.args, :(ptrv∂Ldiag -= $(size_T*W*Nk); ptrv∂Ltri -= $(size_T*W)*($Nk*K+$b2Nk)))
@@ -1161,7 +1161,7 @@ function ∂multivariate_normal_SMLT_quote(
                 push!(q.args, Expr(:(=), Symbol(:v∂μ_,m), :(SIMDPirates.vbroadcast($V, zero($T)))))
             end
         elseif μdim == 1
-            push!(q.args, :(ptrv∂μbase = pointer(v∂μ) + $(size_T*startoffset)))
+            push!(q.args, :(ptrv∂μbase = pointer(v∂μ) + $(size_T*W*startoffset)))
             set_ptr_vmu_zero_expr = quote
                 ptrv∂μ = pointer(v∂μ)
                 for p ∈ 0:$(P-1)
