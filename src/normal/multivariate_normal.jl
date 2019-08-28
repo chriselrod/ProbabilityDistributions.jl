@@ -955,7 +955,7 @@ function ∂multivariate_normal_SMLT_quote(
                         push!(Aquote.args, :(∂μ = PtrVector{$P,$T,$P,$P}(_sptr)))
                         push!(Aquote.args, :(ptr∂μ = _sptr))
                         push!(Aquote.args, :(_sptr += $(VectorizationBase.align(P*size_T))))
-                        push!(Aquote.args, :(v∂μ = PtrVector{$P,$V,$P,$P}(_sptr))) # accmulate in v∂μ; reduce at end
+                        push!(Aquote.args, :(v∂μ = PtrMatrix{$W,$P,$T,$W,$(W*P)}(_sptr))) # accmulate in v∂μ; reduce at end
                         #push!(Aquote.args, :(ptrv∂μ = _sptr))
                         sptroff = W*P*size_T
                         #push!(Aquote.args, :(_sptr += W * P))
@@ -992,7 +992,7 @@ function ∂multivariate_normal_SMLT_quote(
                         ∂μ = PtrVector{$P,$T,$P,$P}(_sptr)
                         ptr∂μ = _sptr
                         _sptr += $(VectorizationBase.align(P*size_T))
-                        v∂μ = PtrVector{$P,$V,$P,$P}(_sptr) # accmulate in v∂μ; reduce at end
+                        v∂μ = PtrMatrix{$W,$P,$T,$W,$(W*P)}(_sptr) # accmulate in v∂μ; reduce at end
                         #ptrv∂μ = _sptr
                         #invdiag = PtrVector{$P,$T,$invdiagL,$invdiagL}(_sptr + $(W*P))
                     end
@@ -1033,7 +1033,7 @@ function ∂multivariate_normal_SMLT_quote(
             end
         end
         if track_L
-            push!(array_allocations.args, :(v∂L = PtrLowerTriangularMatrix{$P,$V,$∂LL}(_sptr + $sptroff)))
+            push!(array_allocations.args, :(v∂L = StructuredMatrices.PtrLowerTriangularMatrix{$P,$V,$∂LL}(_sptr + $sptroff)))
         else
             push!(array_allocations.args, :(invdiag = PtrVector{$P,$T,$invdiagL,$invdiagL}(_sptr + $sptroff)))
             #sptroff += invdiagL*size_T
@@ -1351,8 +1351,8 @@ end
     μ::AbstractMutableFixedSizePaddedVector{P,T},
     L::AbstractLowerTriangularMatrix{P,T},
     ::Val{track} = Val{(true,true,true)}()
-) where {M,P,T,track,MP}
-#) where {M,P,T,MP,track}
+# ) where {M,P,T,track,MP}
+) where {M,P,T,MP,track}
     ∂multivariate_normal_SMLT_quote(M, P, track, 1, 1, true, MP, T)
 end
 @generated function ∂Normal(
