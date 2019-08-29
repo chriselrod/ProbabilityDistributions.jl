@@ -378,7 +378,7 @@ function loadδ_quote(
                 end
             elseif μdim == 2
                 for r ∈ 0:Riter-1
-                    μloadexpr = :(SIMDPirates.vload($V, usymK + $(size_T * (r*W + c*Bstride))))
+                    μloadexpr = :(SIMDPirates.vload($V, usymK + $(size_T * (r*W + c*μstride))))
                     yloadexpr = :(SIMDPirates.vload($V, BsymK + $(size_T * (r*W + c*Bstride))))
                     if μmy
                         push!(q.args, Expr(:(=), Symbol(:A_,r,:_,c), Expr(:call, :(SIMDPirates.vsub), μloadexpr, yloadexpr)))
@@ -389,10 +389,10 @@ function loadδ_quote(
                 if Rrem > 0
                     # Only need to mask if we're on last column
                     if maskload && c == C-1
-                        μloadexpr = :(SIMDPirates.vload($V, μsymK + $(size_T * (Riter*W + c*Bstride)), $mask))
+                        μloadexpr = :(SIMDPirates.vload($V, μsymK + $(size_T * (Riter*W + c*μstride)), $mask))
                         yloadexpr = :(SIMDPirates.vload($V, BsymK + $(size_T * (Riter*W + c*Bstride)), $mask))
                     else
-                        μloadexpr = :(SIMDPirates.vload($V, μsymK + $(size_T * (Riter*W + c*Bstride)) ))
+                        μloadexpr = :(SIMDPirates.vload($V, μsymK + $(size_T * (Riter*W + c*μstride)) ))
                         yloadexpr = :(SIMDPirates.vload($V, BsymK + $(size_T * (Riter*W + c*Bstride)) ))
                     end
                     if μmy
@@ -432,15 +432,160 @@ function loadδ_quote(
     end
     q
 end
+function loadδfnmadd_quote(
+    R::Int, C::Int, K::Union{Symbol,Int}, T::DataType, Ystride::Int, Xstride::Int, βstride::Int, μdim::Int,
+    ysym::Symbol = :Yptr, xsym::Symbol = :Xptr, βsym::Symbol = :βptr, maskload::Bool = true, μmy::Bool = true, XP::Int = -1
+)
+    size_T = sizeof(T)
+    W, Wshift = VectorizationBase.pick_vector_width_shift(R, T)
+    V = Vec{W,T}
+    Wm1 = W - 1
+    Riter = R >> Wshift
+    Rrem = R & Wm1
+    Riterl = Riter > 0 ? Riter : Riter - 1
+    mask = VectorizationBase.mask_from_remainder(T, Rrem)
+    if K isa Symbol
+        q = quote
+            YsymK = $Bsym + $(size_T*Ystride)*$K
+            #XsymK = $μsym + $(size_T*μstride)*$K
+            βsymK = $μsym + $(size_T*βstride)*$K
+        end
+    else
+        q = quote
+            YsymK = $Bsym + $(size_T*Ystride*K)
+            βsymK = $μsym + $(size_T*βstride*K)
+        end
+    end
+    # if μdim == 1, we assume that vμ_r has been computed for r = 0,...,Riter
+    if μdim == 2
+        for r ∈ 0:Riterl
+            if r == Riterl && maskload
+                xloadexpr = :(SIMDPirates.vload($V, xsym + ($size_T * $(r*W)),$mask))
+            else
+                xloadexpr = :(SIMDPirates.vload($V, xsym + ($size_T * $(r*W))))
+            end
+            push!(q.args, Expr(:(=), Symbol(:vx_,r), xloadexpr))
+        end
+    end
+    f = μmy ? :(SIMDPirates.vfmsub) : :(SIMDPirates.vfnmadd)
+    for c ∈ 0:C-1
+        if μdim == 1
+            for r ∈ 0:Riterl
+                vμ_r = Symbol(:vμ_,r)
+                if r == Riterl && maskload && c == C - 1
+                    yloadexpr = :(SIMDPirates.vload($V, BsymK + $(size_T * (r*W + c*Bstride)),$mask))
+                else
+                    yloadexpr = :(SIMDPirates.vload($V, BsymK + $(size_T * (r*W + c*Bstride))))
+                end
+                if μmy
+                    push!(q.args, :($(Symbol(:A_,r,:_,c)) = SIMDPirates.vsub($vμ_r, $yloadexpr)))
+                else
+                    push!(q.args, :($(Symbol(:A_,r,:_,c)) = SIMDPirates.vsub($yloadexpr, $vμ_r)))
+                end
+            end
+        elseif μdim == 2
+            # we load first block, before the XP loop
+            # if  μmy, that is X*β - Y # aka SIMDPirates.vfmsub  # loop vmuladd to this answer
+            # if !μmy, that is Y - X*β # aka SIMDPirates.vfnmadd # loop vfnmadd to this answer
+            β_c = Symbol(:β_,c)
+            push!(q.args, Expr(:(=), β_c, :(SIMDPirates.vbroadcast($V, βsymk + ($size_T * $(c*βstride))))))
+            for r ∈ 0:Riterl
+                if r == Riterl && maskload
+                    if c == C-1
+                        yloadexpr = :(SIMDPirates.vload($V, ysymK + $(size_T * (r*W + c*Bstride)),$mask))
+                    else
+                        yloadexpr = :(SIMDPirates.vload($V, ysymK + $(size_T * (r*W + c*Bstride))))
+                    end
+                end
+                push!(q.args, Expr(:(=), Symbol(:A_,r,:_,c), Expr(:call, f, Symbol(:vx_,r), β_c, yloadexpr)))
+            end
+        end
+    end
+    f = μmy ? :(SIMDPirates.vmuladd) : :(SIMDPirates.vfnmadd)
+    if μdim == 2
+        p = gensym(:p)
+        loopbody = quote end
+        for r ∈ 0:Riterl
+            if r == Riterl && maskload
+                xloadexpr = :(SIMDPirates.vload($V, xsym + $size_T * ($(r*W) + $p*$Xstride)),$mask)
+            else
+                xloadexpr = :(SIMDPirates.vload($V, xsym + $size_T * ($(r*W) + $p*$Xstride)))
+            end
+            push!(loopbody.args, Expr(:(=), Symbol(:vx_,r), xloadexpr))
+        end
+        for c ∈ 0:C-1
+            β_c = Symbol(:β_,c)
+            push!(loopbody.args, Expr(:(=), β_c, :(SIMDPirates.vbroadcast($V, βsymk + $size_T * ($(c*βstride)+$p)))))
+            for r ∈ 0:Riterl
+                push!(loopbody.args, Expr(:(=), Symbol(:A_,r,:_,c), Expr(:call, f, Symbol(:vx_,r), β_c, Symbol(:A_,r,:_,c))))
+            end
+        end
+        loop = quote
+            for $p ∈ 1:$(XP-1)
+                $loopbody
+            end
+        end
+        push!(q.args, loop)
+    end
+    q
+end
+function Xβ_load_quote(
+    R::Int, T::DataType, Xstride::Int, βstride::Int, μmy::Bool = true, XP::Int = -1, 
+    xsym::Symbol = :Xptr, βsym::Symbol = :βptr, maskload::Bool = true
+)
+    size_T = sizeof(T)
+    W, Wshift = VectorizationBase.pick_vector_width_shift(R, T)
+    V = Vec{W,T}
+    Wm1 = W - 1
+    Riter = R >> Wshift
+    Rrem = R & Wm1
+    Riterl = Riter > 0 ? Riter : Riter - 1
+    mask = VectorizationBase.mask_from_remainder(T, Rrem)
+    q = quote end
+    push!(q.args, Expr(:(=), :vβ, :(SIMDPirates.vbroadcast($V, $βsym))))
+    for r ∈ 0:Riterl
+        if r == Riterl && maskload && XP == 1
+            xloadexpr = :(SIMDPirates.vload($V, xsym + ($size_T * $(r*W)),$mask))
+        else
+            xloadexpr = :(SIMDPirates.vload($V, xsym + ($size_T * $(r*W))))
+        end
+        push!(q.args, Expr(:(=), Symbol(:vμ_,r), Expr(:call, :(SIMDPirates.vmul), xloadexpr, :vβ)))
+    end
+    p = gensym(:p)
+    loopbody = quote
+        vβ = SIMDPirates.vbroadcast($V, $βsym + $(size_T*βstride)*$p)
+    end
+    for r ∈ 0:Riterl
+        if r == Riterl && maskload
+            xloadexpr = :(SIMDPirates.vload($V, xsym + $size_T * ($(r*W) + $p*$Xstride)),$mask)
+        else
+            xloadexpr = :(SIMDPirates.vload($V, xsym + $size_T * ($(r*W) + $p*$Xstride)))
+        end
+        push!(loopbody.args, Expr(:(=), Symbol(:vμ_,r), Expr(:call, :(SIMDPirates.vmuladd), xloadexpr, :vβ, Symbol(:vμ_,r))))
+    end
+    loop = quote
+        for $p ∈ 1:$(XP-1)
+            $loopbody
+        end
+    end
+    push!(q.args, loop)
+    q
+end
+
+
 
 function mutlivariate_normal_SMLT_rowiter(
-    Mk::Int, Nk::Int, col_rem::Int, T::DataType, Ystride::Int, n_col_reps::Int, μdim::Int, μstride::Int, μsym::Symbol = :μptr
+    Mk::Int, Nk::Int, col_rem::Int, T::DataType, Ystride::Int, n_col_reps::Int, μdim::Int, μstride::Int, μsym::Symbol = :μptr, XP::Int = -1, Xstride = -1, βstride = -1
 )
     #TODO: NOTE, WE DO NEED TO STORE THE SOLUTION MATRIX (at least 1 row set amd up to the last column block)
     # because this is used for calculating the next iteration.
     N = Nk * n_col_reps + col_rem
     size_T = sizeof(T)
-    row_iter = quote end
+    if μdim == 1 && XP > 0
+        row_iter = Xβ_load_quote(Mk, T, Xstride, βstride, μmy, XP)
+    else
+        row_iter = quote end
+    end
     if col_rem > 0
         loadδ_expr = loadδ_quote(Mk, col_rem, 0, T, Ystride, :ptrY, μdim, μstride, μsym)
         iter_quote = StructuredMatrices.A_rdiv_U_kernel_quote(
@@ -753,7 +898,7 @@ end
 
 function ∂mutlivariate_normal_SMLT_rowiter(
     Mk::Int, Nk::Int, col_rem::Int, T::DataType, Ystride::Int, n_col_reps::Int, μdim::Int, μstride::Int, track::NTuple{D,Bool}, μmy::Bool, μsym::Symbol = :μptr,
-    Astride::Int = Ystride
+    Astride::Int = Ystride, XP::Int = -1, Xstride::Int=-1, βstride::Int=-1
 ) where {D}
     if D == 3
         track_Y, track_μ, track_L = track
@@ -769,7 +914,11 @@ function ∂mutlivariate_normal_SMLT_rowiter(
     # because this is used for calculating the next iteration.
     N = Nk * n_col_reps + col_rem
     size_T = sizeof(T)
-    row_iter = quote end
+    if μdim == 1 && XP > 0
+        row_iter = Xβ_load_quote(Mk, T, Xstride, βstride, μmy, XP)
+    else
+        row_iter = quote end
+    end
     if col_rem > 0
         loadδ_expr = loadδ_quote(Mk, col_rem, 0, T, Ystride, :ptrY, μdim, μstride, μsym, true, μmy)
         iter_quote = StructuredMatrices.A_rdiv_U_kernel_quote(
@@ -869,13 +1018,21 @@ end
 ## StructuredMatrices.jl Lower Triangular (SMLT) quote
 ## M is the sample size
 function ∂multivariate_normal_SMLT_quote(
-    M::Union{Symbol,Integer}, P::Int, track::NTuple{D,Bool}, μdim::Int, μstride::Int, sp::Bool, Ystride::Int = M, T::DataType = Float64
+    M::Union{Symbol,Integer}, P::Int, track::NTuple{D,Bool}, μdim::Int, μstride::Int, sp::Bool, Ystride::Int = M, T::DataType = Float64, xk::Int = -1, βstride::Int=-1
 ) where {D}
-    if μdim >= 0
-        track_Y, track_μ, track_L = track
+    if D == 4
+        track_Y, track_X, track_β, track_L = track
+        track_μ = track_X | track_β
     else
-        track_Y, track_L = track
-        track_μ = false
+        track_X = track_β = false
+        if D == 3
+            track_Y, track_μ, track_L = track
+        elseif D == 2
+            track_Y, track_L = track
+            track_μ = false
+        else
+            throw("Unknown number of arguments ($D) to normal.")
+        end
     end
     q = quote end
     maxM = M isa Symbol ? typemax(Int) : M
@@ -1372,6 +1529,48 @@ end
 ) where {M,P,T,track,MP,MM}
     ∂multivariate_normal_SMLT_quote(M, P, track, 2, MM, true, MP, T)
 end
+
+
+
+@generated function ∂Normal(
+    Y::AbstractMutableFixedSizePaddedMatrix{M,P,T,PY},
+    X::AbstractMutableFixedSizePaddedMatrix{M,K,T,PX},
+    β::AbstractFixedSizePaddedVector{K,T,PK},
+    L::AbstractLowerTriangularMatrix{P,T},
+    ::Val{track} = Val{(true,true,true,true)}()
+) where {M,P,T,track,PY,PX,PK,K}
+    ∂multivariate_normal_SMLT_quote(M, P, track, 1, PX, false, PY, T, K, PK)
+end
+@generated function ∂Normal(
+    sptr::StackPointer,
+    Y::AbstractMutableFixedSizePaddedMatrix{M,P,T,PY},
+    X::AbstractMutableFixedSizePaddedMatrix{M,K,T,PX},
+    β::AbstractFixedSizePaddedVector{K,T,PK},
+    L::AbstractLowerTriangularMatrix{P,T},
+    ::Val{track} = Val{(true,true,true,true)}()
+) where {M,P,T,track,PY,PX,K,PK}
+    ∂multivariate_normal_SMLT_quote(M, P, track, 1, PX, true, MP, T, K, PK)
+end
+@generated function ∂Normal(
+    Y::AbstractMutableFixedSizePaddedMatrix{M,P,T,PY},
+    X::AbstractMutableFixedSizePaddedMatrix{M,K,T,PX},
+    β::AbstractFixedSizePaddedMatrix{K,P,T,PK},
+    L::AbstractLowerTriangularMatrix{P,T},
+    ::Val{track} = Val{(true,true,true,true)}()
+) where {M,P,T,track,PY,PX,K,PK}
+    ∂multivariate_normal_SMLT_quote(M, P, track, 2, PX, false, PY, T, K, PK)
+end
+@generated function ∂Normal(
+    sptr::StackPointer,
+    Y::AbstractMutableFixedSizePaddedMatrix{M,P,T,PY},
+    X::AbstractMutableFixedSizePaddedMatrix{M,K,T,PX},
+    β::AbstractFixedSizePaddedMatrix{K,P,T,PK},
+    L::AbstractLowerTriangularMatrix{P,T},
+    ::Val{track} = Val{(true,true,true,true)}()
+) where {M,P,T,track,PY,PX,K,PK}
+    ∂multivariate_normal_SMLT_quote(M, P, track, 2, PX, true, MP, T, K, PK)
+end
+
 
 
 
