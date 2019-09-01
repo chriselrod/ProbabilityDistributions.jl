@@ -1128,7 +1128,7 @@ function ∂multivariate_normal_SMLT_quote(
         ∂LL = StructuredMatrices.binomial2(P+1)
         if sp
             sptroff = VectorizationBase.align(∂LL, W)
-            push!(array_allocations.args, :(∂L = StructuredMatrices.PtrLowerTriangularMatrix{$P,$T,$(min(sptroff,(∂LL+Wm1)÷W))}(_sptr)))
+            push!(array_allocations.args, :(∂L = StructuredMatrices.PtrLowerTriangularMatrix{$P,$T,$sptroff}(_sptr)))
             push!(array_allocations.args, :(_sptr += $(sptroff*size_T)))
         else
             push!(array_allocations.args, :(v∂L = StructuredMatrices.MutableLowerTriangularMatrix{$P,$V,$∂LL}(undef)))
