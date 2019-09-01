@@ -120,7 +120,7 @@ push!(FMADD_DISTRIBUTIONS, :Bernoulli_logit)
             Eg, a padded vector from PaddedMatrices.jl or SVector from StaticArrays.jl.
         """)
     end
-    q
+    simplify_expr(q)
 end
 @generated function ∂Bernoulli_logit_fmadd(y::BitVector, X::AbstractMatrix{T}, β::AbstractVector{T}, α::AbstractFloat,
                             ::Val{track}) where {T, track}
@@ -203,7 +203,7 @@ end
             Eg, a padded vector from PaddedMatrices.jl or SVector from StaticArrays.jl.
         """)
     end
-    q
+    simplify_expr(q)
 end
 
 push!(DISTRIBUTION_DIFF_RULES, :Bernoulli_logit_fmadd)
@@ -229,11 +229,11 @@ end
             target = vmuladd( ($(N - 3) - n + 2η), SLEEFPirates.log(L[n+1]), target)
         end
         extract_data(target)
-    end
+    end |> simplify_expr
 end
 @generated function ∂LKJ(L::AbstractLKJCorrCholesky{N,T}, η::T, ::Val{track}) where {N,T,track}
     track_L, track_η = track
-    if track_L && track_η
+    q = if track_L && track_η
         quote
 #            out = zero($T)
             target = vbroadcast(Vec{$(VectorizationBase.pick_vector_width(N-1,T)),$T}, zero($T))
@@ -293,6 +293,7 @@ end
             target
         end
     end
+    simplify_expr(q)
 end
 @generated function ∂LKJ(sp::PaddedMatrices.StackPointer, L::AbstractLKJCorrCholesky{N,T}, η::T, ::Val{track}) where {N,T,track}
     track_L, track_η = track
@@ -376,7 +377,7 @@ end
             end
             sp, target
         end
-    end
+    end |> simplify_expr
 end
 push!(DISTRIBUTION_DIFF_RULES, :LKJ)
 
@@ -550,7 +551,7 @@ function gamma_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_�
 #    println("\n\n\n\n\n\n\n\n\n\n")
 #    println(q)
 #    println("\n\n\n\n\n\n\n\n\n\n")
-    if loop
+    q = if loop
         quote
             $(Expr(:meta,:inline))
             @fastmath begin
@@ -575,6 +576,7 @@ function gamma_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_�
             end
         end
     end
+    simplify_expr(q)
 end
 
 # α * log(β) + (α-1) * log(y) - β*y - lgamma(α)
@@ -804,7 +806,7 @@ function beta_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_β
     end
 
 
-    if loop
+    q = if loop
         quote
             $(Expr(:meta,:inline))
             @fastmath begin
@@ -829,6 +831,7 @@ function beta_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_β
             end
         end
     end
+    simplify_expr(q)
 end
 
 # α * log(β) + (α-1) * log(y) - β*y - lgamma(α)

@@ -64,9 +64,8 @@ end
 ) where {T, K, P, V <: PaddedMatrices.AbstractFixedSizePaddedVector{P,T}, KT, track}
     W, Wshift = VectorizationBase.pick_vector_width_shift(P, T)
     track_Y, track_μ, track_Σ = track
-    quote
+    q = quote
         $(Expr(:meta,:inline))
-
         coffset = 0
         for k ∈ 1:$K
             Yₖ = Y[k]
@@ -93,8 +92,8 @@ end
         end
         target = extract_data(starget)
         $(track_Σ ? :(vmuladd($(T(-0.5)), target, vmul(-one($T)*coffset, vlogdet_triangle(L)))) : :(vmul($(T(-0.5)), target)))
-
     end
+    simplify_expr(q)
 end
 
 # Inlined because of:
@@ -250,7 +249,7 @@ end
         push!(q.args, :(target = vmul($(T(-0.5)),target)))
     end
     push!(q.args, ret)
-    q
+    simplify_expr(q)
 end
 @generated function ∂Normal(
     sp::StackPointer,
@@ -294,7 +293,7 @@ end
         push!(q.args, :(sp = PaddedMatrices.StackPointer(Base.unsafe_convert(Ptr{Cvoid}, stack_pointer) )))
     end
     push!(q.args, :(sp, ∂Normal!(Σ⁻¹δ, δ, Y, μ, Σ, Val{$track}()) ))
-    q
+    simplify_expr(q)
 end
 
 @generated function ∂Normal(
@@ -785,7 +784,7 @@ function multivariate_normal_SMLT_quote(M::Union{Symbol,Integer}, P, track::NTup
     end
     push!(q.args, Expr(:(=), :δ²_0, :(SIMDPirates.vmul(SIMDPirates.vbroadcast($V, $(T(-0.5))), δ²_0))))
     push!(q.args, :δ²_0)
-    q
+    simplify_expr(q)
 end
 
 
@@ -1615,7 +1614,7 @@ function ∂multivariate_normal_SMLT_quote(
         loopheader = quote ptrv∂L = pointer(v∂L); ptr∂L = pointer(∂L) end
         loop1body = quote
             VectorizationBase.store!(
-                    ptr∂L + p*$size_T, SIMDPirates.vsum(SIMDPirates.vload($V, ptrv∂L + p*$(W*size_T))) - VectorizationBase.load(ptr∂L + p*$size_T)
+                    ptr∂L + p*$size_T, Base.FastMath.sub_fast(SIMDPirates.vsum(SIMDPirates.vload($V, ptrv∂L + p*$(W*size_T))), Base.FastMath.mul_fast($(M isa Symbol ? :($T($M)) : T(M)), VectorizationBase.load(ptr∂L + p*$size_T)))
                 )
         end
         if track_μ && μdim == 1 && no_Xorβ
@@ -1669,7 +1668,7 @@ function ∂multivariate_normal_SMLT_quote(
     else
         push!(q.args, return_expr)
     end
-    q
+    simplify_expr(q)
 end
 
 
@@ -1751,8 +1750,8 @@ end
     β::AbstractFixedSizePaddedVector{K_,T,PK},
     L::AbstractLowerTriangularMatrix{P,T},
     ::Val{track} = Val{(true,true,true,true)}()
-) where {M,P,T,track,PY,PX,PK,K_}
-# ) where {M,P,T,track,K_,PY,PX,PK}
+# ) where {M,P,T,track,PY,PX,PK,K_}
+) where {M,P,T,track,K_,PY,PX,PK}
     ∂multivariate_normal_SMLT_quote(M, P, track, 1, PX, false, PY, T, K_, 1)
 end
 @generated function ∂Normal(
@@ -1762,8 +1761,8 @@ end
     β::AbstractFixedSizePaddedVector{K_,T,PK},
     L::AbstractLowerTriangularMatrix{P,T},
     ::Val{track} = Val{(true,true,true,true)}()
-# ) where {M,P,T,track,PY,PX,K_,PK}
-) where {M,P,T,track,K_,PY,PX,PK}
+) where {M,P,T,track,PY,PX,K_,PK}
+# ) where {M,P,T,track,K_,PY,PX,PK}
     ∂multivariate_normal_SMLT_quote(M, P, track, 1, PX, true, PY, T, K_, 1)
 end
 @generated function ∂Normal(
@@ -1772,9 +1771,9 @@ end
     β::AbstractFixedSizePaddedMatrix{K_,P,T,PK},
     L::AbstractLowerTriangularMatrix{P,T},
     ::Val{track} = Val{(true,true,true,true)}()
-# ) where {M,P,T,track,PY,PX,K_,PK}
-) where {M,P,T,track,K_,PY,PX,PK}
-    PaddedMatrices.prettify(∂multivariate_normal_SMLT_quote(M, P, track, 2, PX, false, PY, T, K_, PK))
+) where {M,P,T,track,PY,PX,K_,PK}
+# ) where {M,P,T,track,K_,PY,PX,PK}
+    ∂multivariate_normal_SMLT_quote(M, P, track, 2, PX, false, PY, T, K_, PK)
 end
 @generated function ∂Normal(
     sptr::StackPointer,
@@ -1783,8 +1782,8 @@ end
     β::AbstractFixedSizePaddedMatrix{K_,P,T,PK},
     L::AbstractLowerTriangularMatrix{P,T},
     ::Val{track} = Val{(true,true,true,true)}()
-# ) where {M,P,T,track,PY,PX,K_,PK}
-) where {M,P,T,track,K_,PY,PX,PK}
+) where {M,P,T,track,PY,PX,K_,PK}
+# ) where {M,P,T,track,K_,PY,PX,PK}
     ∂multivariate_normal_SMLT_quote(M, P, track, 2, PX, true, PY, T, K_, PK)
 end
 

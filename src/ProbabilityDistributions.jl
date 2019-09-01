@@ -6,7 +6,8 @@ using   SIMDPirates, SLEEFPirates, SpecialFunctions, DistributionParameters,
 
 using PaddedMatrices: StackPointer, DynamicPtrMatrix,
     AbstractFixedSizePaddedVector, AbstractFixedSizePaddedMatrix, AbstractPaddedMatrix,
-    AbstractMutableFixedSizePaddedVector, AbstractMutableFixedSizePaddedMatrix
+    AbstractMutableFixedSizePaddedVector, AbstractMutableFixedSizePaddedMatrix,
+    simplify_expr
 using ScatteredArrays: AbstractScatteredArray
 using StructuredMatrices: AbstractAutoregressiveMatrix, AbstractLowerTriangularMatrix
 using DistributionParameters: AbstractLKJCorrCholesky

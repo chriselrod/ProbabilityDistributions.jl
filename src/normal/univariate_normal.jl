@@ -235,7 +235,7 @@ function univariate_normal_quote(
             end
         end
     end
-    if loop
+    q = if loop
         quote
             $(Expr(:meta,:inline))
             @fastmath begin
@@ -260,6 +260,7 @@ function univariate_normal_quote(
             end
         end
     end
+    simplify_expr(q)
 end
 
 @generated function Normal(y::AbstractFixedSizePaddedVector{M,T}, ::Val{track}) where {M,T,track}
