@@ -1790,4 +1790,23 @@ end
 
 
 
+function ldnorm!(dy, dm, dl, b, y, m, l)
+    b .= m .- y
+    LAPACK.trtrs!('L', 'N', 'N', l, b)
+    lp = dot(b, b); dy .= b
+    LAPACK.trtrs!('L', 'T', 'N', l, dy)
+    dm .= 0
+    @inbounds for n ∈ 1:size(y,2)
+        @simd for p ∈ 1:size(y,1)
+            dm[p] -= dy[p,n]
+        end
+    end
+    BLAS.gemm!('N', 'T', 1.0, dy, b, 0.0, dl)
+    N = size(y,2); lp *= -0.5
+    @inbounds for p ∈ 1:size(dl,1)
+        dl[p,p] -= N * l[p,p]
+        lp -= N * log(l[p,p])
+    end
+    lp
+end
 
