@@ -577,11 +577,15 @@ end
 
 
 function mutlivariate_normal_SMLT_rowiter(
-    Mk::Int, Nk::Int, col_rem::Int, T::DataType, Ystride::Int, n_col_reps::Int, μdim::Int, μstride::Int, μsym::Symbol = :μptr, XP::Int = -1, Xstride = -1, βstride = -1
+    Mk::Int, Nk::Int, col_rem::Int, T::DataType, Ystride::Int, n_col_reps::Int, μdim::Int, μstride::Int, μsym::Symbol = :μptr, XP::Int = -1, βstride = -1
 )
     #TODO: NOTE, WE DO NEED TO STORE THE SOLUTION MATRIX (at least 1 row set amd up to the last column block)
     # because this is used for calculating the next iteration.
-
+    if XP > 0
+        Xstride = μstride
+    else
+        Xstride = -1
+    end
     N = Nk * n_col_reps + col_rem
     
     size_T = sizeof(T)
@@ -651,12 +655,14 @@ end
 
 ## StructuredMatrices.jl Lower Triangular (SMLT) quote
 ## M is the sample size
-function multivariate_normal_SMLT_quote(M::Union{Symbol,Integer}, P, track::NTuple{D,Bool}, μdim::Int, μstride::Int, sp::Bool, Ystride = M, T::DataType = Float64) where {D}
+function multivariate_normal_SMLT_quote(M::Union{Symbol,Integer}, P, track::NTuple{D,Bool}, μdim::Int, μstride::Int, sp::Bool, Ystride = M, T::DataType = Float64, XP::Int = -1, βstride::Int = -1) where {D}
     if D == 4
         track_Y, track_X, track_β, track_L = track
         track_μ = track_X | track_β
         Xstride = μstride
+        no_Xorβ = !track_μ
     else
+        no_Xorβ = true
         track_X = track_β = false
         Xstride = -1
         if D == 3
@@ -707,7 +713,7 @@ function multivariate_normal_SMLT_quote(M::Union{Symbol,Integer}, P, track::NTup
     total_col_iterations > 1 && push!(q.args, Aquote)
     if μdim == 0
         push!(q.args, Expr(:(=), :μptr, :(SIMDPirates.vbroadcast($V, μ))))
-    elseif μdim > 0
+    elseif μdim > 0 && XP == -1
         push!(q.args, Expr(:(=), :μptr, :(pointer(μ))))
     end
     if M isa Integer
@@ -715,16 +721,24 @@ function multivariate_normal_SMLT_quote(M::Union{Symbol,Integer}, P, track::NTup
         total_row_iterations = n_row_reps + (row_rem > 0)
         Mk1 = n_row_reps == 0 ? row_rem : Mk
         row_iter = mutlivariate_normal_SMLT_rowiter(
-            Mk1, Nk, col_rem, T, Ystride, n_col_reps, μdim, μstride, :μptr
+            Mk1, Nk, col_rem, T, Ystride, n_col_reps, μdim, μstride, :μptr, XP, βstride
         )
         if n_row_reps > 1
+            if XP > 0
+                loop_increments = quote ptrY += $(size_T*Mk); ptrX += $(size_T*Mk) end
+            else
+                if μdim == 2
+                    loop_increments = quote ptrY += $(size_T*Mk); ptrμ += $(size_T*Mk) end
+                else μdim == 1
+                    loop_increments = quote ptrY += $(size_T*Mk) end
+                end
+            end
             row_loops = quote
                 for rrep ∈ 1:$n_row_reps
                     ptrUdiag = pointer(invdiag)
                     ptrUtri = ptrUtribase#pointer(B) + $(size_T * N)
                     $row_iter
-                    $(μdim == 2 ? :(ptrY += $(size_T*Mk); ptrμ += $(size_T*Mk)) :  :(ptrY += $(size_T*Mk)))
-                    #ptrA += $(size_T*Mk)
+                    $loop_increments
                 end
             end
             push!(q.args, row_loops)
@@ -733,20 +747,20 @@ function multivariate_normal_SMLT_quote(M::Union{Symbol,Integer}, P, track::NTup
             push!(q.args, :(ptrUtri = ptrUtribase))
             push!(q.args, row_iter)
             if total_row_iterations == 2 # then n_row_reps == 1 and row_rem > 0
-                push!(q.args, mutlivariate_normal_SMLT_rowiter( row_rem, Nk, col_rem, T, Ystride, n_col_reps, μdim, μstride, :μptr ))
+                push!(q.args, mutlivariate_normal_SMLT_rowiter( row_rem, Nk, col_rem, T, Ystride, n_col_reps, μdim, μstride, :μptr, XP, βstride ))
             end
         end
     else # Unknown number of iterations.
         row_iter = mutlivariate_normal_SMLT_rowiter(
-            Mk, Nk, col_rem, T, Ystride, n_col_reps, μdim, μstride, :μptr
+            Mk, Nk, col_rem, T, Ystride, n_col_reps, μdim, μstride, :μptr, XP, βstride
         )
         Wrem, Mkrem, Nkrem = StructuredMatrices.div_triangle_blocking_structure(W, P, T)
         n_col_repsrem, col_remrem = divrem(P, Nkrem)
         row_iter_onevec = mutlivariate_normal_SMLT_rowiter(
-            W, Nkrem, col_remrem, T, Ystride, n_col_repsrem, μdim, μstride, :μptr
+            W, Nkrem, col_remrem, T, Ystride, n_col_repsrem, μdim, μstride, :μptr, XP, βstride
         )
         row_iter_onevecmask = mutlivariate_normal_SMLT_rowiter(
-            :row_rem_final, Nkrem, col_remrem, T, Ystride, n_col_repsrem, μdim, μstride, :μptr
+            :row_rem_final, Nkrem, col_remrem, T, Ystride, n_col_repsrem, μdim, μstride, :μptr, XP, βstride
         )
         row_loops = quote
             Mkrep, Mkrem = divrem($M, $Mk)
@@ -783,7 +797,7 @@ function multivariate_normal_SMLT_quote(M::Union{Symbol,Integer}, P, track::NTup
         R = Rh
     end
     push!(q.args, Expr(:(=), :δ²_0, :(SIMDPirates.vmul(SIMDPirates.vbroadcast($V, $(T(-0.5))), δ²_0))))
-    push!(q.args, :δ²_0)
+    sp ? push!(q.args, :((sp,δ²_0))) : push!(q.args, :δ²_0)
     simplify_expr(q)
 end
 
@@ -857,6 +871,48 @@ end
     multivariate_normal_SMLT_quote(M, P, track, 2, MM, true, MP, T)
 end
 
+@generated function Normal(
+    Y::AbstractMutableFixedSizePaddedMatrix{M,P,T,PY},
+    X::AbstractMutableFixedSizePaddedMatrix{M,K_,T,PX},
+    β::AbstractFixedSizePaddedVector{K_,T,PK},
+    L::AbstractLowerTriangularMatrix{P,T},
+    ::Val{track} = Val{(true,true,true,true)}()
+# ) where {M,P,T,track,PY,PX,PK,K_}
+) where {M,P,T,track,K_,PY,PX,PK}
+    multivariate_normal_SMLT_quote(M, P, track, 1, PX, false, PY, T, K_, 1)
+end
+@generated function Normal(
+    sptr::StackPointer,
+    Y::AbstractMutableFixedSizePaddedMatrix{M,P,T,PY},
+    X::AbstractMutableFixedSizePaddedMatrix{M,K_,T,PX},
+    β::AbstractFixedSizePaddedVector{K_,T,PK},
+    L::AbstractLowerTriangularMatrix{P,T},
+    ::Val{track} = Val{(true,true,true,true)}()
+) where {M,P,T,track,PY,PX,K_,PK}
+# ) where {M,P,T,track,K_,PY,PX,PK}
+    multivariate_normal_SMLT_quote(M, P, track, 1, PX, true, PY, T, K_, 1)
+end
+@generated function Normal(
+    Y::AbstractMutableFixedSizePaddedMatrix{M,P,T,PY},
+    X::AbstractMutableFixedSizePaddedMatrix{M,K_,T,PX},
+    β::AbstractFixedSizePaddedMatrix{K_,P,T,PK},
+    L::AbstractLowerTriangularMatrix{P,T},
+    ::Val{track} = Val{(true,true,true,true)}()
+) where {M,P,T,track,PY,PX,K_,PK}
+# ) where {M,P,T,track,K_,PY,PX,PK}
+    multivariate_normal_SMLT_quote(M, P, track, 2, PX, false, PY, T, K_, PK)
+end
+@generated function Normal(
+    sptr::StackPointer,
+    Y::AbstractMutableFixedSizePaddedMatrix{M,P,T,PY},
+    X::AbstractMutableFixedSizePaddedMatrix{M,K_,T,PX},
+    β::AbstractFixedSizePaddedMatrix{K_,P,T,PK},
+    L::AbstractLowerTriangularMatrix{P,T},
+    ::Val{track} = Val{(true,true,true,true)}()
+) where {M,P,T,track,PY,PX,K_,PK}
+# ) where {M,P,T,track,K_,PY,PX,PK}
+    multivariate_normal_SMLT_quote(M, P, track, 2, PX, true, PY, T, K_, PK)
+end
 
 function track_mu_store(Mk,Nk,T,μdim,μmy,W,Wshift,μstride,track_Y)
     size_T = sizeof(T)
@@ -931,7 +987,7 @@ end
 
 function ∂mutlivariate_normal_SMLT_rowiter(
     Mk::Int, Nk::Int, col_rem::Int, T::DataType, Ystride::Int, n_col_reps::Int, μdim::Int, μstride::Int, track::NTuple{D,Bool}, μmy::Bool, μsym::Symbol = :μptr,
-    Astride::Int = Ystride, XP::Int = -1, Xstride::Int=-1, βstride::Int=-1
+    Astride::Int = Ystride, XP::Int = -1, βstride::Int=-1
 ) where {D}
     if D == 4
         track_Y, track_X, track_β, track_L = track
@@ -1010,7 +1066,7 @@ function ∂mutlivariate_normal_SMLT_rowiter(
         push!(row_iter.args, row_iter_loop)
     elseif n_col_reps == 1
         if XP > 0
-             col_remloadδ_expr = loadδfnmadd_quote(
+            loadδ_expr = loadδfnmadd_quote(
                 Mk, Nk, col_rem, T, Ystride, Xstride, βstride, μdim,
                 :ptrY, :Xptr, :βptr, true, true, XP
             )
@@ -1539,7 +1595,7 @@ function ∂multivariate_normal_SMLT_quote(
         total_row_iterations = n_row_reps + (row_rem > 0)
         Mk1 = n_row_reps == 0 ? row_rem : Mk
         row_iter = ∂mutlivariate_normal_SMLT_rowiter(
-            Mk1, Nk, col_rem, T, Ystride, n_col_reps, μdim, μstride, track, μmy, :μptr, Astride, XP, Xstride, βstride
+            Mk1, Nk, col_rem, T, Ystride, n_col_reps, μdim, μstride, track, μmy, :μptr, Astride, XP, βstride
         )
         if n_row_reps > 1
             row_loops = quote
@@ -1552,30 +1608,30 @@ function ∂multivariate_normal_SMLT_quote(
             end
             push!(q.args, row_loops)
             # if row_rem > 0
-            #     push!(q.args, ∂mutlivariate_normal_SMLT_rowiter( row_rem, Nk, col_rem, T, Ystride, n_col_reps, μdim, μstride, track, μmy, :μptr, Astride, XP, Xstride, βstride ))
+            #     push!(q.args, ∂mutlivariate_normal_SMLT_rowiter( row_rem, Nk, col_rem, T, Ystride, n_col_reps, μdim, μstride, track, μmy, :μptr, Astride, XP, βstride ))
             # end
         else
             push!(q.args, :(ptrUdiag = pointer(invdiag)))
             push!(q.args, :(ptrUtri = ptrUtribase))
             push!(q.args, row_iter)
             # if total_row_iterations == 2 # then n_row_reps == 1 and row_rem > 0
-            #     push!(q.args, ∂mutlivariate_normal_SMLT_rowiter( row_rem, Nk, col_rem, T, Ystride, n_col_reps, μdim, μstride, track, μmy, :μptr, Astride, XP, Xstride, βstride ))
+            #     push!(q.args, ∂mutlivariate_normal_SMLT_rowiter( row_rem, Nk, col_rem, T, Ystride, n_col_reps, μdim, μstride, track, μmy, :μptr, Astride, XP, βstride ))
             # end
         end
         if row_rem > 0 # then n_row_reps == 1 and row_rem > 0
-            push!(q.args, ∂mutlivariate_normal_SMLT_rowiter( row_rem, Nk, col_rem, T, Ystride, n_col_reps, μdim, μstride, track, μmy, :μptr, Astride, XP, Xstride, βstride ))
+            push!(q.args, ∂mutlivariate_normal_SMLT_rowiter( row_rem, Nk, col_rem, T, Ystride, n_col_reps, μdim, μstride, track, μmy, :μptr, Astride, XP, βstride ))
         end
     else # Unknown number of iterations.
         row_iter = ∂mutlivariate_normal_SMLT_rowiter(
-            Mk, Nk, col_rem, T, Ystride, n_col_reps, μdim, μstride, track, μmy, :μptr, Astride, XP, Xstride, βstride
+            Mk, Nk, col_rem, T, Ystride, n_col_reps, μdim, μstride, track, μmy, :μptr, Astride, XP, βstride
         )
         Wrem, Mkrem, Nkrem = StructuredMatrices.div_triangle_blocking_structure(W, P, T)
         n_col_repsrem, col_remrem = divrem(P, Nkrem)
         row_iter_onevec = ∂mutlivariate_normal_SMLT_rowiter(
-            W, Nkrem, col_remrem, T, Ystride, n_col_repsrem, μdim, μstride, track, μmy, :μptr, Astride, XP, Xstride, βstride
+            W, Nkrem, col_remrem, T, Ystride, n_col_repsrem, μdim, μstride, track, μmy, :μptr, Astride, XP, βstride
         )
         row_iter_onevecmask = ∂mutlivariate_normal_SMLT_rowiter(
-            :row_rem_final, Nkrem, col_remrem, T, Ystride, n_col_repsrem, μdim, μstride, track, μmy, :μptr, Astride, XP, Xstride, βstride
+            :row_rem_final, Nkrem, col_remrem, T, Ystride, n_col_repsrem, μdim, μstride, track, μmy, :μptr, Astride, XP, βstride
         )
         row_loops = quote
             Mkrep, Mkrem = divrem($M, $Mk)

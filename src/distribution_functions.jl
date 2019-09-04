@@ -46,8 +46,8 @@ function distribution_diff_rule!(mod, first_pass, second_pass, tracked_vars, out
     if track_out
         push!(tracked_vars, out)
         push!(first_pass.args, :($function_output = $(mod).$(Symbol(:∂, f))($(A...), Val{$track_tup}())))
-#        printstring = "distribution $f (ret: $out): "
-#        push!(first_pass.args, :(println($printstring, $out)))
+        printstring = "distribution $f (ret: $out): "
+        push!(first_pass.args, :(println($printstring, $out)))
 ##        ret_string  = "function: $f: (ret"
 ##        push!(first_pass.args, :(println($ret_string, $function_output)))
     end
@@ -508,7 +508,7 @@ function gamma_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_�
         if partial
             if track_α
                 if αisvec
-                    push!(q.args, Expr(:(=), :∂α₂, :($αstorage + ly)) )
+                    push!(q.args, Expr(:(=), :∂α₂, :($∂αstorage + ly)) )
                 else
                     push!(q.args, Expr(:(+=), ∂αstorage, :ly) )
                 end
@@ -620,7 +620,7 @@ end
     gamma_quote(1, T, false, false, false, track, true, false)
 end
 @generated function ∂Gamma(sp::StackPointer, y::T, α::T, β::T, ::Val{track}) where {track,T <: Real}
-    gamma_quote(1, T, false, false, false, track, true, false)
+    gamma_quote(1, T, false, false, false, track, true, true)
 end
 
 push!(DISTRIBUTION_DIFF_RULES, :Gamma)
