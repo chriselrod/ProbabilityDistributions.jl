@@ -10,7 +10,7 @@ using PaddedMatrices: StackPointer, DynamicPtrMatrix,
     simplify_expr
 using ScatteredArrays: AbstractScatteredArray
 using StructuredMatrices: AbstractAutoregressiveMatrix, AbstractLowerTriangularMatrix
-using DistributionParameters: AbstractLKJCorrCholesky
+using DistributionParameters: AbstractLKJCorrCholesky, AbstractFixedSizeCovarianceMatrix
 using SIMDPirates: extract_data, vbroadcast, vadd, vsub, vfnmadd, vfmsub, vfnmsub, vsum, vload, vstore!
 using VectorizationBase: pick_vector_width, pick_vector_width_shift
 using LoopVectorization: @vvectorize
