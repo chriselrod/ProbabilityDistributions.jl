@@ -26,8 +26,9 @@ y ~ normal(μ, inv(chol(Σ)))
 This may be handled under the hood via how we represent Σ.
 
 """
-function distribution_diff_rule!(mod, first_pass, second_pass, tracked_vars, out, A, f)
+function distribution_diff_rule!(mod, first_pass, second_pass, tracked_vars, out, A, f, verbose = false)
     track_out = false
+#    verbose = true
     function_output = Expr(:tuple, out)
     track_tup = Expr(:tuple,)
     for a ∈ A
@@ -45,9 +46,12 @@ function distribution_diff_rule!(mod, first_pass, second_pass, tracked_vars, out
     end
     if track_out
         push!(tracked_vars, out)
+        if verbose
+            printstring = "distribution $f (ret: $out): "
+            push!(first_pass.args, :(println($printstring)))
+        end
         push!(first_pass.args, :($function_output = $(mod).$(Symbol(:∂, f))($(A...), Val{$track_tup}())))
-        printstring = "distribution $f (ret: $out): "
-        push!(first_pass.args, :(println($printstring, $out)))
+        verbose && push!(first_pass.args, :(println($out)))
 ##        ret_string  = "function: $f: (ret"
 ##        push!(first_pass.args, :(println($ret_string, $function_output)))
     end
@@ -557,7 +561,7 @@ function gamma_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_�
             @fastmath begin
                 $pre_quote
             end
-            target = vbroadcast(SVec{$(VectorizationBase.pick_vector_width(T)),$T}, zero($T))
+            target = vbroadcast(SVec{$(VectorizationBase.pick_vector_width(M,T)),$T}, zero($T))
 #            out = zero($T)
             @vectorize $T for i ∈ 1:$M
                 $q
@@ -592,11 +596,12 @@ end
     gamma_quote(M, T, true, αisvec, βisvec, track, false, false)
 end
 @generated function ∂Gamma(
-            y::PaddedMatrices.AbstractFixedSizePaddedVector{M,T},
-            α::Union{T,<:PaddedMatrices.AbstractFixedSizePaddedVector{M,T}},
-            β::Union{T,<:PaddedMatrices.AbstractFixedSizePaddedVector{M,T}},
-            ::Val{track}) where {track,M,T}
-            # ::Val{track}) where {track,T,M}
+    y::PaddedMatrices.AbstractFixedSizePaddedVector{M,T},
+    α::Union{T,<:PaddedMatrices.AbstractFixedSizePaddedVector{M,T}},
+    β::Union{T,<:PaddedMatrices.AbstractFixedSizePaddedVector{M,T}},
+    ::Val{track}
+#) where {track,M,T}
+) where {track,T,M}
     αisvec = isa(α, PaddedMatrices.AbstractFixedSizePaddedVector)
     βisvec = isa(β, PaddedMatrices.AbstractFixedSizePaddedVector)
     gamma_quote(M, T, true, αisvec, βisvec, track, true, false)

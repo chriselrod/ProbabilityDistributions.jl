@@ -192,13 +192,19 @@ function univariate_normal_quote(
             end
         end
     end
-
+    sp && push!(pre_quote.args, :(_sptr = pointer(sp, $T)))
     if partial
         if track_y
             if yisvec
-                push!(pre_quote.args, :(∂y = MutableFixedSizePaddedVector{$M,$T}(undef) ))
                 push!(loop_expr.args, :(∂y[i] = - δσ⁻¹ * σ⁻¹))
-                push!(return_expr.args, :(ConstantFixedSizePaddedVector(∂y)'))
+                if sp
+                    push!(pre_quote.args, :(∂y = PtrVector{$M,$T,$M,$M}(_sptr)))
+                    push!(pre_quote.args, :(_sptr += $(VectorizationBase.align(M*sizeof(T)))))
+                    push!(return_expr.args, :(∂y'))
+                else
+                    push!(pre_quote.args, :(∂y = MutableFixedSizePaddedVector{$M,$T}(undef) ))
+                    push!(return_expr.args, :(ConstantFixedSizePaddedVector(∂y)'))
+                end
             else
                 push!(pre_quote.args, :(∂y = zero($T)))
                 push!(loop_expr.args, :(∂y -= δσ⁻¹ * σ⁻¹))
@@ -208,9 +214,15 @@ function univariate_normal_quote(
         end
         if track_μ
             if μisvec == true
-                push!(pre_quote.args, :(∂μ = MutableFixedSizePaddedVector{$M,$T}(undef) ))
                 push!(loop_expr.args, :(∂μ[i] = δσ⁻¹ * σ⁻¹))
-                push!(return_expr.args, :(ConstantFixedSizePaddedVector(∂μ)'))
+                if sp
+                    push!(pre_quote.args, :(∂μ = PtrVector{$M,$T,$M,$M}(_sptr)))
+                    push!(pre_quote.args, :(_sptr += $(VectorizationBase.align(M*sizeof(T)))))
+                    push!(return_expr.args, :(∂μ'))
+                else
+                    push!(pre_quote.args, :(∂μ = MutableFixedSizePaddedVector{$M,$T}(undef) ))
+                    push!(return_expr.args, :(ConstantFixedSizePaddedVector(∂μ)'))
+                end
             elseif μisvec == false
                 push!(pre_quote.args, :(∂μ = zero($T)))
                 push!(loop_expr.args, :(∂μ += δσ⁻¹ * σ⁻¹))
@@ -219,10 +231,16 @@ function univariate_normal_quote(
         end
         if track_σ
             if σisvec == true
-                push!(pre_quote.args, :(∂σ = MutableFixedSizePaddedVector{$M,$T}(undef) ))
-#                push!(loop_expr.args, :(∂σ[i] = δσ⁻² * σ⁻¹ ))
                 push!(loop_expr.args, :(∂σ[i] = δσ⁻² * σ⁻¹ - σ⁻¹ ))
-                push!(return_expr.args, :(ConstantFixedSizePaddedVector(∂σ)'))
+                if sp
+                    push!(pre_quote.args, :(∂σ = PtrVector{$M,$T,$M,$M}(_sptr)))
+                    push!(pre_quote.args, :(_sptr += $(VectorizationBase.align(M*sizeof(T)))))
+                    push!(return_expr.args, :(∂σ'))
+                else
+                    push!(pre_quote.args, :(∂σ = MutableFixedSizePaddedVector{$M,$T}(undef) ))
+#                push!(loop_expr.args, :(∂σ[i] = δσ⁻² * σ⁻¹ ))
+                    push!(return_expr.args, :(ConstantFixedSizePaddedVector(∂σ)'))
+                end
             elseif σisvec == false
                 push!(pre_quote.args, :(∂σ = zero($T)))
                 push!(loop_expr.args, :(∂σ += δσ⁻² * σ⁻¹ ))
@@ -235,6 +253,7 @@ function univariate_normal_quote(
             end
         end
     end
+    spexpr = :(PaddedMatrices.StackPointer(_sptr))
     q = if loop
         quote
             $(Expr(:meta,:inline))
@@ -247,7 +266,7 @@ function univariate_normal_quote(
                           end
                           end))
             @fastmath begin
-                $(return_expression(return_expr))
+                $(return_expression(return_expr, sp, spexpr))
             end
         end
     else
@@ -256,7 +275,7 @@ function univariate_normal_quote(
             @fastmath begin
                 $pre_quote
                 $loop_expr
-                $(return_expression(return_expr))
+                $(return_expression(return_expr, sp, spexpr))
             end
         end
     end
@@ -409,6 +428,72 @@ end
 ) where {M, T <: Real, track}
     univariate_normal_quote( M, T, false, false, true, track, true, true)
 end
+
+@generated function ∂Normal(
+    sp::StackPointer,
+    y::AbstractFixedSizePaddedVector{M,T},
+    ::Val{track}
+) where {M,T,track}
+    univariate_normal_quote( M, T, true, nothing, nothing, (track[1], false, false), true, true, true)
+end
+@generated function ∂Normal(
+    sp::StackPointer,
+    y::AbstractFixedSizePaddedVector{M,T},
+    σ::Union{T,Int},
+    ::Val{track}
+#) where {M, T <: Real, track}
+) where {M, track, T <: Real}
+    univariate_normal_quote(
+        M, T, true, nothing, false,
+        (track[1], false, track[2]), true, true, true
+    )
+end
+@generated function ∂Normal(
+    sp::StackPointer,
+    y::AbstractFixedSizePaddedVector{M,T},
+    σ²::Union{LinearAlgebra.UniformScaling{T},LinearAlgebra.UniformScaling{Int}},
+    ::Val{track}
+) where {M, T <: Real, track}
+    univariate_normal_quote(
+        M, T, true, nothing, false,
+        (track[1], false, track[2]), true, false, true
+    )
+end
+@generated function ∂Normal(
+    sp::StackPointer,
+    y::AbstractFixedSizePaddedVector{M,T},
+    μ::Union{T,Int,<:AbstractFixedSizePaddedVector{M,T}},
+    σ::Union{T,Int,<:AbstractFixedSizePaddedVector{M,T}},
+    ::Val{track}
+#) where {M, T <: Real, track}
+) where {M, track, T <: Real}
+    univariate_normal_quote(
+        M, T, true,
+        μ <: AbstractFixedSizePaddedVector, σ <: AbstractFixedSizePaddedVector, track, true, true, true
+    )
+end
+@generated function ∂Normal(
+    sp::StackPointer,
+    y::T,
+    μ::AbstractFixedSizePaddedVector{M,T},
+    σ::Union{T,Int,<:AbstractFixedSizePaddedVector{M,T}},
+    ::Val{track}
+) where {M, T <: Real, track}
+    univariate_normal_quote(
+        M, T, false,
+        true, σ <: AbstractFixedSizePaddedVector, track, true, true, true
+    )
+end
+@generated function ∂Normal(
+    sp::StackPointer,
+    y::T,
+    μ::Union{T,Int},
+    σ::AbstractFixedSizePaddedVector{M,T},
+    ::Val{track}
+) where {M, T <: Real, track}
+    univariate_normal_quote( M, T, false, false, true, track, true, true, true)
+end
+
 
 
 

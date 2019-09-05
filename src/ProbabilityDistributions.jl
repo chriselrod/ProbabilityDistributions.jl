@@ -18,10 +18,11 @@ using LoopVectorization: @vvectorize
 function return_expression(return_expr)
     length(return_expr.args) == 1 ? return_expr.args[1] : return_expr
 end
-function return_expression(return_expr, sp)
+function return_expression(return_expr, sp::Bool, spexpr = :sp)
     expr = length(return_expr.args) == 1 ? return_expr.args[1] : return_expr
-    sp ? Expr(:tuple, :sp, expr) : expr
+    sp ? Expr(:tuple, spexpr, expr) : expr
 end
+
 
 include("distribution_functions.jl")
 include("normal/univariate_normal.jl")
