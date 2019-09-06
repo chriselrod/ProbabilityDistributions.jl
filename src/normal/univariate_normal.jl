@@ -497,3 +497,168 @@ end
 
 
 
+
+@generated function Normal(y::AbstractFixedSizePaddedMatrix{R,C,T,R,M}, ::Val{track}) where {R,C,M,T,track}
+    univariate_normal_quote( M, T, true, nothing, nothing, (track[1], false, false), false, true)
+end
+@generated function Normal(y::AbstractFixedSizePaddedMatrix{R,C,T,R,M}, σ::Union{T,Int}, ::Val{track}) where {R,C,M,T,track}
+    univariate_normal_quote(
+        M, T, true, nothing, false,
+        (track[1], false, track[2]), false, true
+    )
+end
+@generated function Normal(
+                y::AbstractFixedSizePaddedMatrix{R,C,T,R,M},
+                σ²::Union{LinearAlgebra.UniformScaling{T},LinearAlgebra.UniformScaling{Int}}, ::Val{track})::T where {R,C,M,T,track}
+    univariate_normal_quote(
+        M, T, true, nothing, false,
+        (track[1], false, track[2]), false, false
+    )
+end
+@generated function Normal(
+    y::AbstractFixedSizePaddedMatrix{R,C,T,R,M},
+    μ::Union{T,Int,<:AbstractFixedSizePaddedMatrix{R,C,T,R,M}},
+    σ::Union{T,Int,<:AbstractFixedSizePaddedMatrix{R,C,T,R,M}},
+    ::Val{track}
+) where {R,C,M,T,track}
+    univariate_normal_quote( M, T, true,
+        μ <: AbstractFixedSizePaddedMatrix, σ <: AbstractFixedSizePaddedMatrix, track, false, true
+    )
+end
+@generated function Normal(
+    y::T,
+    μ::AbstractFixedSizePaddedMatrix{R,C,T,R,M},
+    σ::Union{T,Int,<:AbstractFixedSizePaddedMatrix{R,C,T,R,M}},
+    ::Val{track}
+) where {R,C,M,T,track}
+    univariate_normal_quote( M, T, false,
+        true, σ <: AbstractFixedSizePaddedMatrix, track, false, true
+    )
+end
+@generated function Normal(
+    y::T,
+    μ::Union{T,Int},
+    σ::AbstractFixedSizePaddedMatrix{R,C,T,R,M},
+    ::Val{track}
+) where {R,C,M,T,track}
+    univariate_normal_quote( M, T, false, false, true, track, false, true)
+end
+    
+@generated function ∂Normal(y::AbstractFixedSizePaddedMatrix{R,C,T,R,M}, ::Val{track}) where {R,C,M,T,track}
+    univariate_normal_quote( M, T, true, nothing, nothing, (track[1], false, false), true, true)
+end
+@generated function ∂Normal(
+    y::AbstractFixedSizePaddedMatrix{R,C,T,R,M}, σ::Union{T,Int}, ::Val{track}
+#) where {M, T <: Real, track}
+) where {R,C,M,T,track}
+    univariate_normal_quote(
+        M, T, true, nothing, false,
+        (track[1], false, track[2]), true, true
+    )
+end
+@generated function ∂Normal(
+    y::AbstractFixedSizePaddedMatrix{R,C,T,R,M},
+    σ²::Union{LinearAlgebra.UniformScaling{T},LinearAlgebra.UniformScaling{Int}}, ::Val{track}
+) where {R,C,M,T,track}
+    univariate_normal_quote(
+        M, T, true, nothing, false,
+        (track[1], false, track[2]), true, false
+    )
+end
+@generated function ∂Normal(
+    y::AbstractFixedSizePaddedMatrix{R,C,T,R,M},
+    μ::Union{T,Int,<:AbstractFixedSizePaddedMatrix{R,C,T,R,M}},
+    σ::Union{T,Int,<:AbstractFixedSizePaddedMatrix{R,C,T,R,M}},
+    ::Val{track}
+) where {R,C,M,T,track}
+    univariate_normal_quote(
+        M, T, true,
+        μ <: AbstractFixedSizePaddedMatrix, σ <: AbstractFixedSizePaddedMatrix, track, true, true
+    )
+end
+@generated function ∂Normal(
+    y::T,
+    μ::AbstractFixedSizePaddedMatrix{R,C,T,R,M},
+    σ::Union{T,Int,<:AbstractFixedSizePaddedMatrix{R,C,T,R,M}},
+    ::Val{track}
+) where {R,C,M,T,track}
+    univariate_normal_quote(
+        M, T, false,
+        true, σ <: AbstractFixedSizePaddedMatrix, track, true, true
+    )
+end
+@generated function ∂Normal(
+    y::T,
+    μ::Union{T,Int},
+    σ::AbstractFixedSizePaddedMatrix{R,C,T,R,M},
+    ::Val{track}
+) where {R,C,M,T,track}
+    univariate_normal_quote( M, T, false, false, true, track, true, true)
+end
+
+@generated function ∂Normal(
+    sp::StackPointer,
+    y::AbstractFixedSizePaddedMatrix{R,C,T,R,M},
+    ::Val{track}
+) where {R,C,M,T,track}
+    univariate_normal_quote( M, T, true, nothing, nothing, (track[1], false, false), true, true, true)
+end
+@generated function ∂Normal(
+    sp::StackPointer,
+    y::AbstractFixedSizePaddedMatrix{R,C,T,R,M},
+    σ::Union{T,Int},
+    ::Val{track}
+) where {R,C,M,T,track}
+    univariate_normal_quote(
+        M, T, true, nothing, false,
+        (track[1], false, track[2]), true, true, true
+    )
+end
+@generated function ∂Normal(
+    sp::StackPointer,
+    y::AbstractFixedSizePaddedMatrix{R,C,T,R,M},
+    σ²::Union{LinearAlgebra.UniformScaling{T},LinearAlgebra.UniformScaling{Int}},
+    ::Val{track}
+) where {R,C,M,T,track}
+    univariate_normal_quote(
+        M, T, true, nothing, false,
+        (track[1], false, track[2]), true, false, true
+    )
+end
+@generated function ∂Normal(
+    sp::StackPointer,
+    y::AbstractFixedSizePaddedMatrix{R,C,T,R,M},
+    μ::Union{T,Int,<:AbstractFixedSizePaddedMatrix{R,C,T,R,M}},
+    σ::Union{T,Int,<:AbstractFixedSizePaddedMatrix{R,C,T,R,M}},
+    ::Val{track}
+) where {R,C,M,T,track}
+    univariate_normal_quote(
+        M, T, true,
+        μ <: AbstractFixedSizePaddedVector, σ <: AbstractFixedSizePaddedVector, track, true, true, true
+    )
+end
+@generated function ∂Normal(
+    sp::StackPointer,
+    y::T,
+    μ::AbstractFixedSizePaddedMatrix{R,C,T,R,M},
+    σ::Union{T,Int,<:AbstractFixedSizePaddedMatrix{R,C,T,R,M}},
+    ::Val{track}
+) where {R,C,M,T,track}
+    univariate_normal_quote(
+        M, T, false,
+        true, σ <: AbstractFixedSizePaddedVector, track, true, true, true
+    )
+end
+@generated function ∂Normal(
+    sp::StackPointer,
+    y::T,
+    μ::Union{T,Int},
+    σ::AbstractFixedSizePaddedMatrix{R,C,T,R,M},
+    ::Val{track}
+) where {R,C,M,T,track}
+    univariate_normal_quote( M, T, false, false, true, track, true, true, true)
+end
+
+
+
+

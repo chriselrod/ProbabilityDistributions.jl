@@ -470,6 +470,71 @@ function loadδ_quote(
     end
     q
 end
+function loadδ_quote(
+    R::Symbol, C::Int, K::Union{Symbol,Int}, T::DataType,
+    Bstride::Symbol, Bsym::Symbol,
+    μdim::Int, μstride::Int,
+    μsym::Union{Symbol,Nothing} = :μptr, maskload::Bool = true,
+    μmy::Bool = true, μtransposed::Bool = false, masksym = :__mask__
+)
+    size_T = sizeof(T)
+    W, Wshift = VectorizationBase.pick_vector_width_shift(R, T)
+    V = Vec{W,T}
+    Wm1 = W - 1
+    q = quote
+            BsymK = $Bsym + $size_T*$Bstride*$K
+        end
+    μdim == 2 && push!(q.args, :(μsumK = $μsym + $(size_T*μstride)*$K))
+    if μsym isa Symbol
+        if μdim == 1 && !μtransposed
+            push!(q.args, Expr(:(=), :vμ_0, :(SIMDPirates.vload($V, $μsym,$masksym))))
+        end
+        for c ∈ 0:C-1            
+            vμ_c = μdim == 0 ? μsym : Symbol(:vμ_, c)
+            if μdim == 1
+                if K isa Symbol
+                    push!(q.args, Expr(:(=), vμ_c, :(SIMDPirates.vbroadcast($V, $μsym + $(size_T*μstride)*($c+$K)))))
+                else
+                    push!(q.args, Expr(:(=), vμ_c, :(SIMDPirates.vbroadcast($V, $μsym + $(size_T*(c + K)*μstride)))))
+                end
+            end
+            if (μdim == 1 && μtransposed) || μdim == 0
+                # Only need to mask if we're on last column
+                yloadexpr = :(SIMDPirates.vload($V, BsymK + $(size_T * c*Bstride), $masksym ))
+                if μmy
+                    push!(q.args, :($(Symbol(:A_0_,c)) = SIMDPirates.vsub($vμ_c, $yloadexpr)))
+                else
+                    push!(q.args, :($(Symbol(:A_0_,c)) = SIMDPirates.vsub($yloadexpr, $vμ_c)))
+                end
+            elseif μdim == 1 && !μtransposed
+                # Only need to mask if we're on last column
+                yloadexpr = :(SIMDPirates.vload($V, BsymK + $(size_T * c*Bstride), $mask ))
+                if μmy
+                    push!(q.args, :($(Symbol(:A_0_,c)) = SIMDPirates.vsub(vμ_0, $yloadexpr)))
+                else
+                    push!(q.args, :($(Symbol(:A_0_,c)) = SIMDPirates.vsub($yloadexpr, vμ_0)))
+                end
+            elseif μdim == 2
+                # Only need to mask if we're on last column
+                μloadexpr = :(SIMDPirates.vload($V, μsymK + $(size_T * c*μstride), $masksym))
+                yloadexpr = :(SIMDPirates.vload($V, BsymK + $(size_T * c*Bstride), $masksym))
+                if μmy
+                    push!(q.args, Expr(:(=), Symbol(:A_0_,c)), Expr(:call,:(SIMDPirates.vsub), μloadexpr, yloadexpr))
+                else
+                    push!(q.args, Expr(:(=), Symbol(:A_0_,c)), Expr(:call,:(SIMDPirates.vsub), yloadexpr, μloadexpr))
+                end
+            else #μ assumed not to exist
+                    # Only need to mask if we're on last column
+                push!(q.args, :($(Symbol(:A_0_,c)) = SIMDPirates.vload($V, BsymK + $(size_T * c*Bstride), $masksym ) ))
+            end
+        end
+    else
+        for c ∈ 0:C-1
+            push!(q.args, :($(Symbol(:A_0_,c)) = SIMDPirates.vload($V, BsymK + $(size_T * c*Bstride), $masksym ) ))
+        end
+    end
+    q
+end
 function loadδfnmadd_quote(
     R::Int, C::Int, K::Union{Symbol,Int}, T::DataType, Ystride::Int, Xstride::Int, βstride::Int, βdim::Int,
     ysym::Symbol = :ptrY, xsym::Symbol = :ptrX, βsym::Symbol = :ptrβ, μsym::Symbol = :ptrμ,
@@ -579,9 +644,9 @@ function loadδfnmadd_quote(
                 elseif μstride != -1
                     if μdim == 1
                         if μmy
-                            yloadexpr = :(SIMDPirates.vsub($(Symbol(:vμ_, μtransposed ? c : r)),$yloadexpr))
+                            yloadexpr = :(SIMDPirates.vsub($(Symbol(:vμbase_, μtransposed ? c : r)),$yloadexpr))
                         else
-                            yloadexpr = :(SIMDPirates.vsub($yloadexpr,$(Symbol(:vμ_, μtransposed ? c : r))))
+                            yloadexpr = :(SIMDPirates.vsub($yloadexpr,$(Symbol(:vμbase_, μtransposed ? c : r))))
                         end
                     else#if αdim == 2
                         if r == Riterl && maskload && c == C - 1
@@ -619,6 +684,117 @@ function loadδfnmadd_quote(
             for r ∈ 0:Riterl
                 push!(loopbody.args, Expr(:(=), Symbol(:A_,r,:_,c), Expr(:call, f, Symbol(:vx_,r), β_c, Symbol(:A_,r,:_,c))))
             end
+        end
+        loop = quote
+            for $p ∈ $(peel_first_iter ? 1 : 0):$(XP-1)
+                $loopbody
+            end
+        end
+        push!(q.args, loop)
+    end
+    q
+end
+function loadδfnmadd_quote(
+    R::Symbol, C::Int, K::Union{Symbol,Int}, T::DataType, Ystride::Symbol, Xstride::Symbol, βstride::Int, βdim::Int,
+    ysym::Symbol = :ptrY, xsym::Symbol = :ptrX, βsym::Symbol = :ptrβ, μsym::Symbol = :ptrμ,
+    maskload::Bool = true, μmy::Bool = true, XP::Int = -1,
+    μstride::Int = -1, μdim::Int = -1, μtransposed::Bool = false, masksym = :__mask__
+)
+    size_T = sizeof(T)
+    W, Wshift = VectorizationBase.pick_vector_width_shift(R, T)
+    V = Vec{W,T}
+    Wm1 = W - 1
+    if K isa Symbol
+        q = quote
+            YsymK = $ysym + $(size_T*Ystride)*$K
+        end
+        βdim == 2 && push!(q.args, :(βsymK = $βsym + $(size_T*βstride)*$K))
+        μdim == 2 && push!(q.args, :(μsymK = $μsym + $(size_T*μstride)*$K))
+    else
+        q = quote
+            YsymK = $ysym + $(size_T*Ystride*K)
+        end
+        βdim == 2 && push!(q.args, :(βsymK = $βsym + $(size_T*βstride*K)))
+        μdim == 2 && push!(q.args, :(μsymK = $μsym + $(size_T*μstride*K)))
+    end
+    # if μdim == 1, we assume that vμ_r has been computed for r = 0,...,Riter
+    peel_first_iter = μmy & (βdim == 2) & (μstride == -1)
+    # we will peel the first iteration if these are all true, because
+    # if μmy then we want to make y negative, otherwise we don't
+    # given that we want to make y negative, if...
+    # μstride == -1, then we do have an intercept term which we can use for (y - μ)
+    # if βdim == 1, then we can reorder the single subtraction
+    if peel_first_iter
+        xloadexpr = :(SIMDPirates.vload($V, $xsym + $size_T, $masksym))
+        push!(q.args, :(vx_0 = $xloadexpr))
+    end
+    f = μmy ? :(SIMDPirates.vfmsub) : :(SIMDPirates.vfnmadd)
+    if μstride != -1 && μdim == 1
+        if μtransposed
+            for c ∈ 0:C-1
+                push!(q.args, Expr(:(=), Symbol(:vμbase_,c), :(SIMDPirates.vbroadcast($V, $μsym + $(size_T*μstride)*($K+$c) ))))
+            end
+        else
+            push!(q.args, :(vμbase_0 = SIMDPirates.vload($V, $μsym + $size_T,$masksym)))
+        end
+    end
+    for c ∈ 0:C-1
+        if βdim == 1
+            yloadexpr = :(SIMDPirates.vload($V, YsymK + $(size_T * c*Ystride),$masksym))
+            if μstride != -1
+                if μdim == 1
+                    yloadexpr = :(SIMDPirates.vsub($yloadexpr,$(Symbol(:vμbase_, μtransposed ? c : 0))))
+                else#if μdim == 2
+                    αloadexpr = :(SIMDPirates.vload($V, $μsym + $(size_T * c*μstride),$masksym))
+                    yloadexpr = :(SIMDPirates.vsub($yloadexpr,$αloadexpr))
+                end
+            end
+            if μmy
+                push!(q.args, :($(Symbol(:A_0_,c)) = SIMDPirates.vsub(vμ_0, $yloadexpr)))
+            else
+                push!(q.args, :($(Symbol(:A_0_,c)) = SIMDPirates.vsub($yloadexpr, vμ_0)))
+            end
+        elseif βdim == 2
+            # we load first block, before the XP loop
+            # if  μmy, that is X*β - Y # aka SIMDPirates.vfmsub  # loop vmuladd to this answer
+            # if !μmy, that is Y - X*β # aka SIMDPirates.vfnmadd # loop vfnmadd to this answer
+            if peel_first_iter
+                β_c = Symbol(:β_,c)
+                push!(q.args, Expr(:(=), β_c, :(SIMDPirates.vbroadcast($V, βsymK + ($size_T * $(c*βstride))))))
+            end
+            yloadexpr = :(SIMDPirates.vload($V, YsymK + $(size_T * c*Ystride),$masksym))
+            # What is happening here is that we want to make y negative
+            if peel_first_iter
+                yloadexpr = Expr(:call, f, :vx_0, β_c, yloadexpr)
+            elseif μstride != -1
+                if μdim == 1
+                    if μmy
+                        yloadexpr = :(SIMDPirates.vsub($(Symbol(:vμbase_, μtransposed ? c : 0)),$yloadexpr))
+                    else
+                        yloadexpr = :(SIMDPirates.vsub($yloadexpr,$(Symbol(:vμbase_, μtransposed ? c : 0))))
+                    end
+                else#if αdim == 2
+                    μloadexpr = :(SIMDPirates.vload($V, μsymK + $(size_T * c*μstride),$masksym))
+                    yloadexpr = if μmy
+                        :(SIMDPirates.$vsub($μloadexpr,$yloadexpr))
+                    else
+                        :(SIMDPirates.$vsub($yloadexpr,$μloadexpr))
+                    end
+                end
+            end
+            push!(q.args, Expr(:(=), Symbol(:A_0_,c), yloadexpr))
+        end
+    end
+    f = μmy ? :(SIMDPirates.vmuladd) : :(SIMDPirates.vfnmadd)
+    if βdim == 2
+        p = gensym(:p)
+        loopbody = quote end
+        xloadexpr = :(SIMDPirates.vload($V, $xsym + $size_T * ($p*$Xstride),$masksym))
+        push!(loopbody.args, Expr(:(=), :vx_0, xloadexpr))
+        for c ∈ 0:C-1
+            β_c = Symbol(:β_,c)
+            push!(loopbody.args, Expr(:(=), β_c, :(SIMDPirates.vbroadcast($V, βsymK + $size_T * ($(c*βstride)+$p)))))
+            push!(loopbody.args, Expr(:(=), Symbol(:A_0_,c), Expr(:call, f, :vx_0, β_c, Symbol(:A_0_,c))))
         end
         loop = quote
             for $p ∈ $(peel_first_iter ? 1 : 0):$(XP-1)
@@ -678,11 +854,39 @@ function Xβ_load_quote(
     # end
     q
 end
-
+# The symbol version assumes R < W (the SIMD width)
+function Xβ_load_quote(
+    R::Symbol, T::DataType, Xstride::Symbol, βstride::Int, μmy::Bool = true, XP::Int = -1, 
+    xsym::Symbol = :ptrX, βsym::Symbol = :ptrβ, maskload::Bool = true, masksym = :__mask__
+)
+    size_T = sizeof(T)
+    W, Wshift = VectorizationBase.pick_vector_width_shift(T)
+    V = Vec{W,T}
+    Wm1 = W - 1
+    q = quote end
+    # Initial load
+    push!(q.args, Expr(:(=), :vβ, :(SIMDPirates.vbroadcast($V, $βsym))))
+    xloadexpr = :(SIMDPirates.vload($V, $xsym, $masksym))
+    push!(q.args, Expr(:(=), :vμ_0, Expr(:call, :(SIMDPirates.vmul), xloadexpr, :vβ)))
+    p = gensym(:p)
+    # update through loop
+    loopbody = quote
+        vβ = SIMDPirates.vbroadcast($V, $βsym + $size_T*$p)
+    end
+    xloadexpr = :(SIMDPirates.vload($V, $xsym + $size_T * $p*$Xstride, $masksym))
+    push!(loopbody.args, Expr(:(=), :vμ_0, :(SIMDPirates.vmuladd($xloadexpr, vβ, vμ_0))))
+    loop = quote
+        for $p ∈ 1:$(XP-1)
+            $loopbody
+        end
+    end
+    push!(q.args, loop)
+    q
+end
 
 function mutlivariate_normal_SMLT_rowiter(
-    Mk::Union{Int,Symbol}, Nk::Int, col_rem::Int, T::DataType, Ystride::Int, n_col_reps::Int, μdim::Int = -1, μstride::Int = -1,
-    μsym::Symbol = :ptrμ, XP::Int = -1, βstride::Int = -1, Xstride::Int = -1, βdim::Int = -1, μtransposed::Bool = false
+    Mk::Union{Int,Symbol}, Nk::Int, col_rem::Int, T::DataType, Ystride::Union{Int,Symbol}, n_col_reps::Int, μdim::Int = -1, μstride::Int = -1,
+    μsym::Symbol = :ptrμ, XP::Int = -1, βstride::Int = -1, Xstride::Union{Int,Symbol} = -1, βdim::Int = -1, μtransposed::Bool = false
 )
     #TODO: NOTE, WE DO NEED TO STORE THE SOLUTION MATRIX (at least 1 row set amd up to the last column block)
     # because this is used for calculating the next iteration.
@@ -755,8 +959,8 @@ end
 ## StructuredMatrices.jl Lower Triangular (SMLT) quote
 ## M is the sample size
 function multivariate_normal_SMLT_quote(
-    M::Union{Symbol,Integer}, P::Int, track::NTuple{D,Bool}, T::DataType = Float64;
-    Ystride::Int = M, βstride::Int = -1, Xstride::Int = -1, βdim::Int = -1,
+    M::Union{Symbol,Int}, P::Int, track::NTuple{D,Bool}, T::DataType = Float64;
+    Ystride::Union{Symbol,Int} = M, βstride::Int = -1, Xstride::Union{Symbol,Int} = -1, βdim::Int = -1,
     μdim::Int = -1, μstride::Int= -1, sp::Bool = false, XP::Int = -1, μtransposed::Bool = false
 ) where {D}
     if D == 5
@@ -833,21 +1037,18 @@ function multivariate_normal_SMLT_quote(
         if n_row_reps > 1
             row_loops = quote
                 for rrep ∈ 1:$n_row_reps
-                    ptrUdiag = pointer(invdiag)
-                    ptrUtri = ptrUtribase#pointer(B) + $(size_T * N)
+                    ptrUdiag = pointer(invdiag); ptrUtri = ptrUtribase
                     $row_iter
                     $loop_increments
                 end
             end
             push!(q.args, row_loops)
         else
-            push!(q.args, :(ptrUdiag = pointer(invdiag)))
-            push!(q.args, :(ptrUtri = ptrUtribase))
+            push!(q.args, :(ptrUdiag = pointer(invdiag); ptrUtri = ptrUtribase))
             push!(q.args, row_iter)
         end
         if row_rem > 0 && n_row_reps > 0
-            push!(q.args, :(ptrUdiag = pointer(invdiag)))
-            push!(q.args, :(ptrUtri = ptrUtribase))
+            push!(q.args, :(ptrUdiag = pointer(invdiag); ptrUtri = ptrUtribase))
             push!(q.args, mutlivariate_normal_SMLT_rowiter( row_rem, Nk, col_rem, T, Ystride, n_col_reps, μdim, μstride, :ptrμ, XP, βstride, Xstride, βdim, μtransposed ))
         end
     else # Unknown number of iterations.
@@ -868,18 +1069,18 @@ function multivariate_normal_SMLT_quote(
         row_loops = quote
             Mkrep, Mkrem = divrem($M, $Mk)
             for rrep ∈ 1:Mkrep
-                ptrUdiag = pointer(invdiag)
-                ptrUtri = ptrUtribase#pointer(B) + $(size_T * N)
+                ptrUdiag = pointer(invdiag); ptrUtri = ptrUtribase
                 $row_iter
                 $loop_increments
             end
             for rrep ∈ 1:Mkrem >> $(VectorizationBase.intlog2(W))
-                ptrUdiag = pointer(invdiag)
-                ptrUtri = ptrUtribase#pointer(B) + $(size_T * N)
+                ptrUdiag = pointer(invdiag); ptrUtri = ptrUtribase
                 $row_iter_onevec
                 $loop_increments_onevec
             end
+            ptrUdiag = pointer(invdiag); ptrUtri = ptrUtribase
             row_rem_final = Mkrem & $Wm1
+            __mask__ = VectorizationBase.mask($T, row_rem_final)
             $row_iter_onevecmask
         end
         push!(q.args, row_loops)
@@ -903,55 +1104,56 @@ function multivariate_normal_SMLT_quote(
 end
 
 @generated function Normal(
-    Y::AbstractMutableFixedSizePaddedMatrix{M,P,T,MP},
+    Y::AbstractMutableFixedSizePaddedMatrix{M,P,T,PY},
     L::AbstractLowerTriangularMatrix{P,T},
     ::Val{track} = Val{(true,true)}()
-) where {M,P,T,track,MP}
-    multivariate_normal_SMLT_quote(M, P, track, T, Ystride = MP, sp = false)
+) where {M,P,T,track,PY}
+    multivariate_normal_SMLT_quote(M, P, track, T, Ystride = PY, sp = false)
 end
 @generated function Normal(
     sptr::StackPointer,
-    Y::AbstractMutableFixedSizePaddedMatrix{M,P,T,MP},
+    Y::AbstractMutableFixedSizePaddedMatrix{M,P,T,PY},
     L::AbstractLowerTriangularMatrix{P,T},
     ::Val{track} = Val{(true,true)}()
-) where {M,P,T,track,MP}
-    multivariate_normal_SMLT_quote(M, P, track, T, Ystride = MP, sp = true)
+) where {M,P,T,track,PY}
+    multivariate_normal_SMLT_quote(M, P, track, T, Ystride = PY, sp = true)
 end
 
 
 @generated function Normal(
-    Y::AbstractMutableFixedSizePaddedMatrix{M,P,T,MP},
+    Y::AbstractMutableFixedSizePaddedMatrix{M,P,T,PY},
     μ::Tμ,
     L::AbstractLowerTriangularMatrix{P,T},
     ::Val{track} = Val{(true,true,true)}()
-) where {M,P,T,track,MP,Tμ}
+) where {M,P,T,PY,Tμ,track}
+# ) where {M,P,T,track,PY,Tμ}
     if Tμ === T
-        multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = MP, μdim = 0, μstride = 0)
+        multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, μdim = 0, μstride = 0)
     elseif Tμ <: LinearAlgebra.Adjoint
-        multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = MP, μdim = 1, μstride = 1, μtransposed = true)
+        multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, μdim = 1, μstride = 1, μtransposed = true)
     elseif Tμ <: AbstractFixedSizePaddedVector
-        multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = MP, μdim = 1, μstride = 1)
+        multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, μdim = 1, μstride = 1)
     elseif Tμ <: AbstractFixedSizePaddedMatrix
-        multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = MP, μdim = 2, μstride = Tμ.parameters[4])
+        multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, μdim = 2, μstride = Tμ.parameters[4])
     else
         throw("Type of μ == $A is not recognized.")
     end
 end
 @generated function Normal(
     sptr::StackPointer,
-    Y::AbstractMutableFixedSizePaddedMatrix{M,P,T,MP},
+    Y::AbstractMutableFixedSizePaddedMatrix{M,P,T,PY},
     μ::Tμ,
     L::AbstractLowerTriangularMatrix{P,T},
     ::Val{track} = Val{(true,true,true)}()
-) where {M,P,T,track,MP,Tμ}
+) where {M,P,T,track,PY,Tμ}
     if Tμ === T
-        multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = MP, μdim = 0, μstride = 0)
+        multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, μdim = 0, μstride = 0)
     elseif Tμ <: LinearAlgebra.Adjoint{T,<:PaddedMatrices.AbstractMutableFixedSizePaddedVector}
-        multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = MP, μdim = 1, μstride = 1, μtransposed = true)
+        multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, μdim = 1, μstride = 1, μtransposed = true)
     elseif Tμ <: AbstractFixedSizePaddedVector
-        multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = MP, μdim = 1, μstride = 1)
+        multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, μdim = 1, μstride = 1)
     elseif Tμ <: AbstractFixedSizePaddedMatrix
-        multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = MP, μdim = 2, μstride = Tμ.parameters[4])
+        multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, μdim = 2, μstride = Tμ.parameters[4])
     else
         throw("Type of μ == $A is not recognized.")
     end
@@ -991,8 +1193,8 @@ end
     μ::Tμ,
     L::AbstractLowerTriangularMatrix{P,T},
     ::Val{track} = Val{(true,true,true,true,true)}()
-# ) where {M,P,T,track,PY,PX,K_,Sβ,Nβ,Pβ,Tμ}
-) where {M,P,T,track,PY,PX,Sβ,Nβ,Pβ,Tμ,K_}
+) where {M,P,T,track,PY,PX,K_,Sβ,Nβ,Pβ,Tμ}
+# ) where {M,P,T,track,PY,PX,Sβ,Nβ,Pβ,Tμ,K_}
     @assert Sβ.parameters[1] == K_
     if Tμ === T
         multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, βstride = Pβ, Xstride = PX, βdim = Nβ, XP = K_, μdim = 0, μstride = 0)
@@ -1014,8 +1216,8 @@ end
     μ::Tμ,
     L::AbstractLowerTriangularMatrix{P,T},
     ::Val{track} = Val{(true,true,true,true,true)}()
-# ) where {M,P,T,track,PY,PX,K_,Sβ,Nβ,Pβ,Tμ}
-) where {M,P,T,track,PY,PX,Sβ,Nβ,Pβ,Tμ,K_}
+) where {M,P,T,track,PY,PX,K_,Sβ,Nβ,Pβ,Tμ}
+# ) where {M,P,T,track,PY,PX,Sβ,Nβ,Pβ,Tμ,K_}
     @assert Sβ.parameters[1] == K_
     if Tμ === T
         multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, βstride = Pβ, Xstride = PX, βdim = Nβ, XP = K_, μdim = 0, μstride = 0)
@@ -1030,7 +1232,186 @@ end
     end
 end
 
-function track_mu_store(Mk,Nk,T,μdim,μmy,W,Wshift,μstride,track_Y,μtransposed,initialize::Bool=false)
+
+
+@generated function Normal(
+    Y::AbstractMatrix{T},
+    L::AbstractLowerTriangularMatrix{P,T},
+    ::Val{track} = Val{(true,true)}()
+) where {P,T,track}
+    M, PY = gensym(:M), gensym(:PY)
+    quote
+        $M = size(Y,1)
+        $PY = $(Y <: Array ? M : :(stride(Y,2)))
+        $(multivariate_normal_SMLT_quote(M, P, track, T, Ystride = PY, sp = false))
+    end
+end
+@generated function Normal(
+    sptr::StackPointer,
+    Y::AbstractMatrix{T},
+    L::AbstractLowerTriangularMatrix{P,T},
+    ::Val{track} = Val{(true,true)}()
+) where {P,T,track}
+    M, PY = gensym(:M), gensym(:PY)
+    quote
+        $M = size(Y,1)
+        $PY = $(Y <: Array ? M : :(stride(Y,2)))
+        $(multivariate_normal_SMLT_quote(M, P, track, T, Ystride = PY, sp = true))
+    end
+end
+
+
+@generated function Normal(
+    Y::AbstractMatrix{T},
+    μ::Tμ,
+    L::AbstractLowerTriangularMatrix{P,T},
+    ::Val{track} = Val{(true,true,true)}()
+# ) where {P,T,track,Tμ}
+) where {P,T,Tμ,track}
+    M, PY = gensym(:M), gensym(:PY)
+    q = if Tμ === T
+        multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, μdim = 0, μstride = 0)
+    elseif Tμ <: LinearAlgebra.Adjoint
+        multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, μdim = 1, μstride = 1, μtransposed = true)
+    elseif Tμ <: AbstractFixedSizePaddedVector
+        multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, μdim = 1, μstride = 1)
+    elseif Tμ <: AbstractFixedSizePaddedMatrix
+        multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, μdim = 2, μstride = Tμ.parameters[4])
+    else
+        throw("Type of μ == $A is not recognized.")
+    end
+    quote
+        $M = size(Y,1)
+        $PY = $(Y <: Array ? M : :(stride(Y,2)))
+        $q
+    end
+end
+@generated function Normal(
+    sptr::StackPointer,
+    Y::AbstractMatrix{T},
+    μ::Tμ,
+    L::AbstractLowerTriangularMatrix{P,T},
+    ::Val{track} = Val{(true,true,true)}()
+) where {P,T,track,Tμ}
+    M, PY = gensym(:M), gensym(:PY)
+    q = if Tμ === T
+        multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, μdim = 0, μstride = 0)
+    elseif Tμ <: LinearAlgebra.Adjoint{T,<:PaddedMatrices.AbstractMutableFixedSizePaddedVector}
+        multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, μdim = 1, μstride = 1, μtransposed = true)
+    elseif Tμ <: AbstractFixedSizePaddedVector
+        multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, μdim = 1, μstride = 1)
+    elseif Tμ <: AbstractFixedSizePaddedMatrix
+        multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, μdim = 2, μstride = Tμ.parameters[4])
+    else
+        throw("Type of μ == $A is not recognized.")
+    end
+    quote
+        M = size(Y,1)
+        PY = $(Y <: Array ? M : :(stride(Y,2)))
+        $q
+    end
+end
+
+@generated function Normal(
+    Y::AbstractMatrix{T},
+    X::AbstractMatrix{T},
+    β::AbstractMutableFixedSizePaddedArray{Sβ,T,Nβ,Pβ},
+    L::AbstractLowerTriangularMatrix{P,T},
+    ::Val{track} = Val{(true,true,true,true)}()
+) where {P,T,track,PK,Sβ,Nβ,Pβ}
+    K_ = Sβ.parameters[1]
+    M, PY, PX = gensym(:M), gensym(:PY), gensym(:PX)
+    q = multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, βstride = Pβ, Xstride = PX, βdim = Nβ, XP = K_)
+    quote
+        M = size(Y,1)
+        PY = $(Y <: Array ? M : :(stride(Y,2)))
+        PX = $(X <: Array ? M : :(stride(X,R)))
+        $q
+    end
+end
+@generated function Normal(
+    sptr::StackPointer,
+    Y::AbstractMatrix{T},
+    X::AbstractMatrix{T},
+    β::AbstractMutableFixedSizePaddedArray{Sβ,T,Nβ,Pβ},
+    L::AbstractLowerTriangularMatrix{P,T},
+    ::Val{track} = Val{(true,true,true,true)}()
+) where {P,T,track,PK,Sβ,Nβ,Pβ}
+    K_ = Sβ.parameters[1]
+    M, PY, PX = gensym(:M), gensym(:PY), gensym(:PX)
+    q = multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, βstride = Pβ, Xstride = PX, βdim = Nβ, XP = K_)
+    quote
+        M = size(Y,1)
+        PY = $(Y <: Array ? M : :(stride(Y,2)))
+        PX = $(X <: Array ? M : :(stride(X,2)))
+        $q
+    end
+end
+
+    # M::Union{Symbol,Integer}, P::Int, track::NTuple{D,Bool}, T::DataType = Float64;
+    # Ystride::Int = M, βstride::Int = -1, Xstride::Int = -1, βdim::Int = -1,
+    # μdim::Int, μstride::Int, sp::Bool, XP::Int = -1, μtransposed::Bool = false
+@generated function Normal_fmadd(
+    Y::AbstractMatrix{T},
+    X::AbstractMatrix{T},
+    β::AbstractMutableFixedSizePaddedArray{Sβ,T,Nβ,Pβ},
+    μ::Tμ,
+    L::AbstractLowerTriangularMatrix{P,T},
+    ::Val{track} = Val{(true,true,true,true,true)}()
+) where {P,T,track,Sβ,Nβ,Pβ,Tμ}
+    K_ = Sβ.parameters[1]
+    M, PY, PX = gensym(:M), gensym(:PY), gensym(:PX)
+    q = if Tμ === T
+        multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, βstride = Pβ, Xstride = PX, βdim = Nβ, XP = K_, μdim = 0, μstride = 0)
+    elseif Tμ <: LinearAlgebra.Adjoint{T,<:PaddedMatrices.AbstractMutableFixedSizePaddedVector}
+        multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, βstride = Pβ, Xstride = PX, βdim = Nβ, XP = K_, μdim = 1, μstride = 1, μtransposed = true)
+    elseif Tμ <: AbstractFixedSizePaddedVector
+        multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, βstride = Pβ, Xstride = PX, βdim = Nβ, XP = K_, μdim = 1, μstride = 1)
+    elseif Tμ <: AbstractFixedSizePaddedMatrix
+        multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, βstride = Pβ, Xstride = PX, βdim = Nβ, XP = K_, μdim = 2, μstride = Tμ.parameters[4])
+    else
+        throw("Type of μ == $A is not recognized.")
+    end
+    quote
+        M = size(Y,1)
+        MP = $(Y <: Array ? M : :(stride(Y,2)))
+        PX = $(X <: Array ? M : :(stride(X,2)))
+        $q
+    end
+end
+@generated function Normal_fmadd(
+    sptr::StackPointer,
+    Y::AbstractMatrix{T},
+    X::AbstractMatrix{T},
+    β::AbstractMutableFixedSizePaddedArray{Sβ,T,Nβ,Pβ},
+    μ::Tμ,
+    L::AbstractLowerTriangularMatrix{P,T},
+    ::Val{track} = Val{(true,true,true,true,true)}()
+) where {P,T,track,Sβ,Nβ,Pβ,Tμ}
+    K_ = Sβ.parameters[1]
+    M, PY, PX = gensym(:M), gensym(:PY), gensym(:PX)
+    q = if Tμ === T
+        multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, βstride = Pβ, Xstride = PX, βdim = Nβ, XP = K_, μdim = 0, μstride = 0)
+    elseif Tμ <: LinearAlgebra.Adjoint{T,<:PaddedMatrices.AbstractMutableFixedSizePaddedVector}
+        multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, βstride = Pβ, Xstride = PX, βdim = Nβ, XP = K_, μdim = 1, μstride = 1, μtransposed = true)
+    elseif Tμ <: AbstractFixedSizePaddedVector
+        multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, βstride = Pβ, Xstride = PX, βdim = Nβ, XP = K_, μdim = 1, μstride = 1)
+    elseif Tμ <: AbstractFixedSizePaddedMatrix
+        multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, βstride = Pβ, Xstride = PX, βdim = Nβ, XP = K_, μdim = 2, μstride = Tμ.parameters[4])
+    else
+        throw("Type of μ == $A is not recognized.")
+    end
+    quote
+        M = size(Y,1)
+        PY = $(Y <: Array ? M : :(stride(Y,2)))
+        PX = $(X <: Array ? M : :(stride(X,2)))
+        $q
+    end
+end
+
+
+
+function track_mu_store(Mk::Int,Nk,T,μdim,μmy,W,Wshift,μstride,track_Y,μtransposed,initialize::Bool=false)
     size_T = sizeof(T)
     V = Vec{W,T}
     Riter = Mk >> Wshift
@@ -1041,9 +1422,15 @@ function track_mu_store(Mk,Nk,T,μdim,μmy,W,Wshift,μstride,track_Y,μtranspose
     f = μmy ? :vsub : :vadd
     if μdim == 0
         iter = 0
-        for c ∈ 0:(Nk-1), m ∈ 0:((Mk>>Wshift)-1)
+        for c ∈ 0:(Nk-1), m ∈ 0:Riterl
+            mask_this_iter = m == Riterl && Rrem > 0
             pm = Symbol(:∂μ_,iter & 3)
-            push!(row_iter.args, Expr(:(=), pm, :(SIMDPirates.$f($pm, $(Symbol(:A_,m,:_,c))))))
+            A_m_c = Symbol(:A_,m,:_,c)
+            if mask_this_iter
+                push!(row_iter.args, Expr(:(=), pm, :(SIMDPirates.vifelse($mask,SIMDPirates.$f($pm, $A_m_c),$p_m))))
+            else
+                push!(row_iter.args, Expr(:(=), pm, :(SIMDPirates.$f($pm, $A_m_c))))
+            end
             iter += 1
         end
     elseif μdim == 1
@@ -1052,9 +1439,16 @@ function track_mu_store(Mk,Nk,T,μdim,μmy,W,Wshift,μstride,track_Y,μtranspose
                 mc = Symbol(:vμ_,c)
                 push!(row_iter.args, Expr(:(=), mc, :(SIMDPirates.vload($V, ptrv∂μ + $(c*W*size_T)))))
             end
-            for m ∈ 0:Riterl, c ∈ 0:(Nk-1)
-                mc = Symbol(:vμ_,c)
-                push!(row_iter.args, Expr(:(=), mc, :(SIMDPirates.$f($mc, $(Symbol(:A_,m,:_,c))))))
+            for m ∈ 0:Riterl
+                mask_this_iter = m == Riterl && Rrem > 0
+                for c ∈ 0:(Nk-1)
+                    mc = Symbol(:vμ_,c)
+                    if mask_this_iter
+                        push!(row_iter.args, Expr(:(=), mc, :(SIMDPirates.vifelse($mask,SIMDPirates.$f($mc, $(Symbol(:A_,m,:_,c))),$mc))))
+                    else
+                        push!(row_iter.args, Expr(:(=), mc, :(SIMDPirates.$f($mc, $(Symbol(:A_,m,:_,c))))))
+                    end
+                end
             end
             for c ∈ 0:(Nk-1)
                 mc = Symbol(:vμ_,c)
@@ -1074,6 +1468,8 @@ function track_mu_store(Mk,Nk,T,μdim,μmy,W,Wshift,μstride,track_Y,μtranspose
                 firstc = 1
             else
                 for m ∈ 0:Riterl
+                    # We don't mask here, because beyond the end of the vector is junk, and since things are padded to allignment, the vector wont encroach on data we care about.
+                    # if m == Riterl
                     push!(row_iter.args, Expr(:(=), Symbol(:v∂μ_, m), :(SIMDPirates.vload($V, ptr∂μ + $(m*W*size_T) ) )))
                 end
                 firstc = 0
@@ -1085,7 +1481,11 @@ function track_mu_store(Mk,Nk,T,μdim,μmy,W,Wshift,μstride,track_Y,μtranspose
                 end
             end
             for m ∈ 0:Riterl
-                push!(row_iter.args, :(SIMDPirates.vstore!(ptr∂μ + $(m*W*size_T), $(Symbol(:v∂μ_, m)) )))
+                # if m == Riterl && Rrem > 0
+                    # push!(row_iter.args, :(SIMDPirates.vstore!(ptr∂μ + $(m*W*size_T), $(Symbol(:v∂μ_, m)), $mask )))
+                # else
+                    push!(row_iter.args, :(SIMDPirates.vstore!(ptr∂μ + $(m*W*size_T), $(Symbol(:v∂μ_, m)) )))
+                # end
             end
         end
     elseif μdim == 2
@@ -1103,6 +1503,62 @@ function track_mu_store(Mk,Nk,T,μdim,μmy,W,Wshift,μstride,track_Y,μtranspose
                         push!(row_iter.args, :(SIMDPirates.vstore!($index, $nAsym)))
                     end
                 end
+            end        
+        end # else, ptrA holds partial_mu, so we don't have to do anything
+    end
+    row_iter
+end
+
+function track_mu_store(Mk::Symbol,Nk,T,μdim,μmy,W,Wshift,μstride,track_Y,μtransposed,initialize::Bool=false,masksym = :__mask__)
+    size_T = sizeof(T)
+    V = Vec{W,T}
+    mask = VectorizationBase.mask_from_remainder(T, Rrem)
+    row_iter = quote end
+    f = μmy ? :vsub : :vadd
+    if μdim == 0
+        iter = 0
+        for c ∈ 0:(Nk-1)
+            pm = Symbol(:∂μ_,iter & 3)
+            A_m_c = Symbol(:A_0_,c)
+            push!(row_iter.args, Expr(:(=), pm, :(SIMDPirates.vifelse($masksym,SIMDPirates.$f($pm, $A_m_c),$p_m))))
+            iter += 1
+        end
+    elseif μdim == 1
+        if μtransposed
+            for c ∈ 0:(Nk-1)
+                mc = Symbol(:vμ_,c)
+                push!(row_iter.args, Expr(:(=), mc, :(SIMDPirates.vload($V, ptrv∂μ + $(c*W*size_T)))))
+            end
+            for c ∈ 0:(Nk-1)
+                mc = Symbol(:vμ_,c)
+                push!(row_iter.args, Expr(:(=), mc, :(SIMDPirates.vifelse($masksym,SIMDPirates.$f($mc, $(Symbol(:A_0_,c))),$mc))))
+            end
+            for c ∈ 0:(Nk-1)
+                mc = Symbol(:vμ_,c)
+                push!(row_iter.args, :(SIMDPirates.vstore!(ptrv∂μ + $(c*W*size_T), $mc)))
+            end
+        else
+            if initialize
+                if μmy
+                    push!(row_iter.args, :(v∂μ_0 = SIMDPirates.vsub(A_0_0)))
+                else
+                    push!(row_iter.args, :(v∂μ_0 = A_0_0))
+                end
+                firstc = 1
+            else
+                push!(row_iter.args, Expr(:(=), Symbol(:v∂μ_, m), :(SIMDPirates.vload($V, ptr∂μ, $masksym ) )))
+                firstc = 0
+            end
+            for c ∈ firstc:Nk-1
+                pm = :v∂μ_0
+                push!(row_iter.args, Expr(:(=), pm, :(SIMDPirates.$f($pm, $(Symbol(:A_0_,c))))))
+            end
+            push!(row_iter.args, :(SIMDPirates.vstore!(ptr∂μ, v∂μ_0, $masksym )))
+        end
+    elseif μdim == 2
+        if track_Y
+            for c ∈ 0:(Nk-1)
+                push!(row_iter.args, :(SIMDPirates.vstore!(ptr∂μ + $size_T*$c*$μstride, SIMDPirates.vsub($(Symbol(:A_0_,c))),$masksym)))
             end        
         end # else, ptrA holds partial_mu, so we don't have to do anything
     end
@@ -1134,11 +1590,11 @@ function loop_pointer_increments(track_Y, track_μ, track_X, track_β, track_L, 
 end
 
 function ∂mutlivariate_normal_SMLT_rowiter(
-    Mk::Union{Int,Symbol}, Nk::Int, col_rem::Int, T::DataType, Ystride::Int,
+    Mk::Union{Int,Symbol}, Nk::Int, col_rem::Int, T::DataType, Ystride::Union{Int,Symbol},
     n_col_reps::Int, μdim::Int, μstride::Int, track::NTuple{D,Bool},
     μmy::Bool, μsym::Symbol = :μptr,
-    Astride::Int = Ystride, XP::Int = -1, βstride::Int=-1,
-    Xstride::Int = -1, βdim::Int = -1, μtransposed::Bool = false
+    Astride::Union{Int,Symbol} = Ystride, XP::Int = -1, βstride::Int=-1,
+    Xstride::Union{Int,Symbol} = -1, βdim::Int = -1, μtransposed::Bool = false
 ) where {D}
     if D == 5
         track_Y, track_X, track_β, track_μ, track_L = track
@@ -1158,7 +1614,11 @@ function ∂mutlivariate_normal_SMLT_rowiter(
             end
         end
     end
-    W, Wshift = VectorizationBase.pick_vector_width_shift(Mk, T)
+    if Mk isa Int
+        W, Wshift = VectorizationBase.pick_vector_width_shift(Mk, T)
+    else
+        W, Wshift = VectorizationBase.pick_vector_width_shift(T)
+    end
     V = Vec{W,T}
     #TODO: NOTE, WE DO NEED TO STORE THE SOLUTION MATRIX (at least 1 row set amd up to the last column block)
     # because this is used for calculating the next iteration.
@@ -1244,7 +1704,7 @@ function ∂mutlivariate_normal_SMLT_rowiter(
     end
     if col_rem > 0
         row_iter_rev = StructuredMatrices.A_rdiv_L_kernel_quote(
-            Mk, col_rem, col_rem, T, Astride, Ystride, false, true,
+            Mk, col_rem, col_rem, T, Astride, Astride, false, true,
             Bsym = :ptrA_rev, Asym = :ptrA_rev, Ltrisym = :ptrLtri, Ldiagsym = :ptrLdiag,
             loadB = true, storeA = true, calc_product = track_L ? N : 0
         )
@@ -1262,7 +1722,7 @@ function ∂mutlivariate_normal_SMLT_rowiter(
     loop_ptr_increments = loop_pointer_increments(track_Y, track_μ, track_X, track_β, track_L, Nk, Nk, :K, size_T, W, Astride, μstride, μdim, μtransposed)
     if n_col_reps > 1
         iterquote = StructuredMatrices.A_rdiv_L_kernel_quote(
-            Mk, Nk, :K, T, Astride, Ystride, false, true,
+            Mk, Nk, :K, T, Astride, Astride, false, true,
             Bsym = :ptrA_rev, Asym = :ptrA_rev, Ltrisym = :ptrLtri, Ldiagsym = :ptrLdiag,
             loadB = true, storeA = true, calc_product = track_L ? N : 0
         )
@@ -1286,7 +1746,7 @@ function ∂mutlivariate_normal_SMLT_rowiter(
         push!(row_iter.args, row_iter_rev_loop)
     elseif n_col_reps == 1
         row_iter_rev_single = StructuredMatrices.A_rdiv_L_kernel_quote(
-            Mk, Nk, N, T, Astride, Ystride, false, true,
+            Mk, Nk, N, T, Astride, Astride, false, true,
             Bsym = :ptrA_rev, Asym = :ptrA_rev, Ltrisym = :ptrLtri, Ldiagsym = :ptrLdiag,
             loadB = true, storeA = true, calc_product = track_L ? N : 0
         )
@@ -1300,7 +1760,7 @@ end
 ## M is the sample size
 function ∂multivariate_normal_SMLT_quote(
     M::Union{Symbol,Integer}, P::Int, track::NTuple{D,Bool}, T::DataType = Float64;
-    βstride::Int = -1, Xstride::Int = -1, Ystride::Int = M, μstride::Int = -1,
+    βstride::Int = -1, Xstride::Union{Symbol,Int} = -1, Ystride::Union{Symbol,Int} = M, μstride::Int = -1,
     μdim::Int = -1, sp::Bool = false, βdim::Int = -1,  XP::Int = -1, μtransposed::Bool = false
 ) where {D}
     if D == 5
@@ -1491,14 +1951,15 @@ function ∂multivariate_normal_SMLT_quote(
                     end
                 end
                 if track_β # we vbroadcast from β rather than load, so no point alligning columns
-                    push!(Aquote.args, :(∂β = PtrMatrix{$XP,$P,$T,$XP}(_sptr); ptr∂β = _sptr))
-                    alignβoffset = VectorizationBase.align(size_T * XP * P)
+                    XPL = VectorizationBase.align(XP, T)
+                    push!(Aquote.args, :(∂β = PtrMatrix{$XP,$P,$T}(_sptr); ptr∂β = _sptr))
+                    alignβoffset = XPL*P*size_T
                     if βdim == 1
-                        push!(Aquote.args, :(_sptr += $(VectorizationBase.align(size_T * XP)))) # impacts the pointer we ultimately return
+                        push!(Aquote.args, :(_sptr += $(XPL*size_T))) # impacts the pointer we ultimately return
                         # first increment (because of if/else statements), so we could (and did) turn the += into an =
                         # gives extra offset for future allocations
-                        sptroff += alignβoffset - VectorizationBase.align(size_T * XP)
-                        push!(Aquote.args, Expr(:(=), :∂βv, :(PtrVector{$XP,$T,$XP,$XP}(ptr∂β))))
+                        sptroff += alignβoffset - XPL * size_T
+                        push!(Aquote.args, Expr(:(=), :∂βv, :(PtrVector{$XP,$T}(ptr∂β))))
                     else
                         push!(Aquote.args, :(_sptr += $alignβoffset))
                     end
@@ -1610,16 +2071,15 @@ function ∂multivariate_normal_SMLT_quote(
                     push!(Aquote.args, :(ptr∂μ = pointer(∂μ)))
                 end
                 if track_β # we vbroadcast from β rather than load, so no point alligning columns
-                    push!(Aquote.args, :(∂β = MutableFixedSizePaddedMatrix{$XP,$P,$T,$XP}(undef)))
+                    push!(Aquote.args, :(∂β = MutableFixedSizePaddedMatrix{$XP,$P,$T}(undef)))
                     if βdim == 1
-                        push!(Aquote.args, Expr(:(=), :∂βv, :(MutableFixedSizePaddedVector{$XP,$T,$XP,$XP}(undef))))
+                        push!(Aquote.args, Expr(:(=), :∂βv, :(MutableFixedSizePaddedVector{$XP,$T}(undef))))
                     end
                 end
             end
         end
     end
     push!(array_allocations.args, Aquote)
-    push!(return_expr.args, :(∂L))
     Mk2 = min(4, M isa Symbol ? cld(Mk,W) : cld(min(Mk,M),W))
     startoffset = (total_col_iterations-1) * Nk
     loopexpr = quote
@@ -1726,20 +2186,18 @@ function ∂multivariate_normal_SMLT_quote(
         row_loops = quote
             Mkrep, Mkrem = divrem($M, $Mk)
             for rrep ∈ 1:Mkrep
-                ptrUdiag = pointer(invdiag)
-                ptrUtri = ptrUtribase#pointer(B) + $(size_T * N)
+                ptrUdiag = pointer(invdiag); ptrUtri = ptrUtribase
                 $row_iter
                 $row_increments
             end
             for rrep ∈ 1:Mkrem >> $(VectorizationBase.intlog2(W))
-                ptrUdiag = pointer(invdiag)
-                ptrUtri = ptrUtribase#pointer(B) + $(size_T * N)
+                ptrUdiag = pointer(invdiag); ptrUtri = ptrUtribase
                 $row_iter_onevec
                 $row_increments_rem
             end
             row_rem_final = Mkrem & $Wm1
-            ptrUdiag = pointer(invdiag)
-            ptrUtri = ptrUtribase
+            ptrUdiag = pointer(invdiag); ptrUtri = ptrUtribase
+            __mask__ = VectorizationBase.mask($T, row_rem_final)
             $row_iter_onevecmask
         end
         push!(q.args, row_loops)
@@ -1862,8 +2320,8 @@ end
     μ::Tμ,
     L::AbstractLowerTriangularMatrix{P,T},
     ::Val{track} = Val{(true,true,true)}()
-# ) where {M,P,T,PY,Tμ,track}
-) where {M,P,T,track,PY,Tμ}
+) where {M,P,T,PY,Tμ,track}
+# ) where {M,P,T,track,PY,Tμ}
     if Tμ === T
         ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, μdim = 0, μstride = 0)
     elseif Tμ <: LinearAlgebra.Adjoint{T,<:AbstractMutableFixedSizePaddedVector}
@@ -1884,8 +2342,8 @@ end
     β::AbstractMutableFixedSizePaddedArray{Sβ,T,Nβ,Pβ},
     L::AbstractLowerTriangularMatrix{P,T},
     ::Val{track} = Val{(true,true,true,true)}()
-# ) where {M,P,T,track,PY,PX,Sβ,Nβ,Pβ,K_}
-) where {M,P,T,track,K_,PY,PX,Sβ,Nβ,Pβ}
+) where {M,P,T,track,PY,PX,Sβ,Nβ,Pβ,K_}
+# ) where {M,P,T,track,K_,PY,PX,Sβ,Nβ,Pβ}
     @assert Sβ.parameters[1] == K_
     ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, Xstride = PX, βstride = Pβ, βdim = Nβ, XP = K_)
 end
@@ -1896,8 +2354,8 @@ end
     β::AbstractMutableFixedSizePaddedArray{Sβ,T,Nβ,Pβ},
     L::AbstractLowerTriangularMatrix{P,T},
     ::Val{track} = Val{(true,true,true,true)}()
-) where {M,P,T,track,PY,PX,Sβ,Nβ,Pβ,K_}
-# ) where {M,P,T,track,K_,PY,PX,Sβ,Nβ,Pβ}
+# ) where {M,P,T,track,PY,PX,Sβ,Nβ,Pβ,K_}
+) where {M,P,T,track,K_,PY,PX,Sβ,Nβ,Pβ}
     @assert Sβ.parameters[1] == K_
     ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, Xstride = PX, βstride = Pβ, βdim = Nβ, XP = K_)
 end
@@ -1951,6 +2409,183 @@ end
         throw("Type of μ = $(Tμ) was not recognized.")
     end
 end
+
+
+
+@generated function ∂Normal(
+    Y::AbstractMatrix{T},
+    L::AbstractLowerTriangularMatrix{P,T},
+    ::Val{track} = Val{(true,true)}()
+) where {P,T,track}
+    M, PY = gensym(:M), gensym(:PY)
+    quote
+        $M = size(Y,1)
+        $PY = $(Y <: Array ? M : :(stride(Y,2)))
+        $(∂multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY))
+    end
+end
+@generated function ∂Normal(
+    sptr::StackPointer,
+    Y::AbstractMatrix{T},
+    L::AbstractLowerTriangularMatrix{P,T},
+    ::Val{track} = Val{(true,true)}()
+) where {P,T,track}
+    M, PY = gensym(:M), gensym(:PY)
+    quote
+        $M = size(Y,1)
+        $PY = $(Y <: Array ? M : :(stride(Y,2)))
+        $(∂multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY))
+    end
+end
+@generated function ∂Normal(
+    Y::AbstractMatrix{T},
+    μ::Tμ,
+    L::AbstractLowerTriangularMatrix{P,T},
+    ::Val{track} = Val{(true,true,true)}()
+) where {P,T,Tμ,track}
+    M, PY = gensym(:M), gensym(:PY)
+    q = if Tμ === T
+        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, μdim = 0, μstride = 0)
+    elseif Tμ <: LinearAlgebra.Adjoint{T,<:AbstractMutableFixedSizePaddedVector}
+        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, μdim = 1, μstride = 1, μtransposed = true)
+    elseif Tμ <: AbstractMutableFixedSizePaddedVector
+        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, μdim = 1, μstride = 1)
+    elseif Tμ <: AbstractMutableFixedSizePaddedMatrix
+        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, μdim = 2, μstride = Tμ.parameters[4])
+    else
+        throw("Type of μ = $(Tμ) was not recognized.")
+    end
+    quote
+        $M = size(Y,1)
+        $PY = $(Y <: Array ? M : :(stride(Y,2)))
+        $q
+    end
+end
+@generated function ∂Normal(
+    sptr::StackPointer,
+    Y::AbstractMatrix{T},
+    μ::Tμ,
+    L::AbstractLowerTriangularMatrix{P,T},
+    ::Val{track} = Val{(true,true,true)}()
+) where {P,T,Tμ,track}
+    M, PY = gensym(:M), gensym(:PY)
+    q = if Tμ === T
+        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, μdim = 0, μstride = 0)
+    elseif Tμ <: LinearAlgebra.Adjoint{T,<:AbstractMutableFixedSizePaddedVector}
+        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, μdim = 1, μstride = 1, μtransposed = true)
+    elseif Tμ <: AbstractMutableFixedSizePaddedVector
+        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, μdim = 1, μstride = 1)
+    elseif Tμ <: AbstractMutableFixedSizePaddedMatrix
+        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, μdim = 2, μstride = Tμ.parameters[4])
+    else
+        throw("Type of μ = $(Tμ) was not recognized.")
+    end
+    quote
+        $M = size(Y,1)
+        $PY = $(Y <: Array ? M : :(stride(Y,2)))
+        $q
+    end
+end
+
+
+@generated function ∂Normal(
+    Y::AbstractMatrix{T},
+    X::AbstractMatrix{T},
+    β::AbstractMutableFixedSizePaddedArray{Sβ,T,Nβ,Pβ},
+    L::AbstractLowerTriangularMatrix{P,T},
+    ::Val{track} = Val{(true,true,true,true)}()
+) where {P,T,track,Sβ,Nβ,Pβ}
+    M, PY, PX = gensym(:M), gensym(:PY), gensym(:PX)
+    K_ = Sβ.parameters[1]
+    q = ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, Xstride = PX, βstride = Pβ, βdim = Nβ, XP = K_)
+    quote
+        $M = size(Y,1)
+        $PY = $(Y <: Array ? M : :(stride(Y,2)))
+        $PX = $(X <: Array ? M : :(stride(X,2)))
+        $q
+    end
+end
+@generated function ∂Normal(
+    sptr::StackPointer,
+    Y::AbstractMatrix{T},
+    X::AbstractMatrix{T},
+    β::AbstractMutableFixedSizePaddedArray{Sβ,T,Nβ,Pβ},
+    L::AbstractLowerTriangularMatrix{P,T},
+    ::Val{track} = Val{(true,true,true,true)}()
+) where {P,T,track,Sβ,Nβ,Pβ}
+    M, PY, PX = gensym(:M), gensym(:PY), gensym(:PX)
+    K_ = Sβ.parameters[1]
+    q = ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, Xstride = PX, βstride = Pβ, βdim = Nβ, XP = K_)
+    quote
+        $M = size(Y,1)
+        $PY = $(Y <: Array ? M : :(stride(Y,2)))
+        $PX = $(X <: Array ? M : :(stride(X,2)))
+        $q
+    end
+end
+
+
+    # M::Union{Symbol,Integer}, P::Int, track::NTuple{D,Bool}, T::DataType = Float64;
+    # βstride::Int = -1, Xstride::Int = -1, Ystride::Int = M, μstride::Int = -1,
+    # μdim::Int = -1, sp::Bool = false, βdim::Int = -1,  XP::Int = -1, μtransposed::Bool = false
+@generated function ∂Normal_fmadd(
+    Y::AbstractMatrix{T},
+    X::AbstractMatrix{T},
+    β::AbstractMutableFixedSizePaddedArray{Sβ,T,Nβ,Pβ},
+    μ::Tμ,
+    L::AbstractLowerTriangularMatrix{P,T},
+    ::Val{track} = Val{(true,true,true,true,true)}()
+) where {P,T,track,Tμ,Sβ,Nβ,Pβ}
+    M, PY, PX = gensym(:M), gensym(:PY), gensym(:PX)
+    K_ = Sβ.parameters[1]
+    q = if Tμ === T
+        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, Xstride = PX, βstride = Pβ, βdim = Nβ, XP = K_, μdim = 0, μstride = 0)
+    elseif Tμ <: LinearAlgebra.Adjoint{T,<:AbstractMutableFixedSizePaddedVector}
+        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, Xstride = PX, βstride = Pβ, βdim = Nβ, XP = K_, μdim = 1, μstride = 1, μtransposed = true)
+    elseif Tμ <: AbstractMutableFixedSizePaddedVector
+        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, Xstride = PX, βstride = Pβ, βdim = Nβ, XP = K_, μdim = 1, μstride = 1)
+    elseif Tμ <: AbstractMutableFixedSizePaddedMatrix
+        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, Xstride = PX, βstride = Pβ, βdim = Nβ, XP = K_, μdim = 2, μstride = Tμ.parameters[4])
+    else
+        throw("Type of μ = $(Tμ) was not recognized.")
+    end
+    quote
+        $M = size(Y,1)
+        $PY = $(Y <: Array ? M : :(stride(Y,2)))
+        $PX = $(X <: Array ? M : :(stride(X,2)))
+        $q
+    end
+end
+@generated function ∂Normal_fmadd(
+    sptr::StackPointer,
+    Y::AbstractMatrix{T},
+    X::AbstractMatrix{T},
+    β::AbstractMutableFixedSizePaddedArray{Sβ,T,Nβ,Pβ},
+    μ::Tμ,
+    L::AbstractLowerTriangularMatrix{P,T},
+    ::Val{track} = Val{(true,true,true,true,true)}()
+) where {P,T,track,Sβ,Nβ,Pβ,Tμ}
+    M, PY, PX = gensym(:M), gensym(:PY), gensym(:PX)
+    K_ = Sβ.parameters[1]
+    q = if Tμ === T
+        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, Xstride = PX, βstride = Pβ, βdim = Nβ, XP = K_, μdim = 0, μstride = 0)
+    elseif Tμ <: LinearAlgebra.Adjoint{T,<:AbstractMutableFixedSizePaddedVector}
+        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, Xstride = PX, βstride = Pβ, βdim = Nβ, XP = K_, μdim = 1, μstride = 1, μtransposed = true)
+    elseif Tμ <: AbstractMutableFixedSizePaddedVector
+        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, Xstride = PX, βstride = Pβ, βdim = Nβ, XP = K_, μdim = 1, μstride = 1)
+    elseif Tμ <: AbstractMutableFixedSizePaddedMatrix
+        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, Xstride = PX, βstride = Pβ, βdim = Nβ, XP = K_, μdim = 2, μstride = Tμ.parameters[4])
+    else
+        throw("Type of μ = $(Tμ) was not recognized.")
+    end
+    quote
+        $M = size(Y,1)
+        $PY = $(Y <: Array ? M : :(stride(Y,2)))
+        $PX = $(X <: Array ? M : :(stride(X,2)))
+        $q
+    end
+end
+
 push!(DISTRIBUTION_DIFF_RULES, :Normal_fmadd)
 push!(FMADD_DISTRIBUTIONS, :Normal)
 
