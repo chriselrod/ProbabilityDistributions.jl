@@ -7,7 +7,7 @@ using   SIMDPirates, SLEEFPirates, SpecialFunctions, DistributionParameters,
 using PaddedMatrices: StackPointer, DynamicPtrMatrix,
     AbstractFixedSizePaddedVector, AbstractFixedSizePaddedMatrix, AbstractPaddedMatrix,
     AbstractMutableFixedSizePaddedVector, AbstractMutableFixedSizePaddedMatrix,
-    simplify_expr
+    AbstractMutableFixedSizePaddedArray, simplify_expr
 using ScatteredArrays: AbstractScatteredArray
 using StructuredMatrices: AbstractAutoregressiveMatrix, AbstractLowerTriangularMatrix
 using DistributionParameters: AbstractLKJCorrCholesky, AbstractFixedSizeCovarianceMatrix
@@ -29,15 +29,17 @@ include("normal/univariate_normal.jl")
 include("normal/multivariate_normal.jl")
 include("normal/matrix_normal.jl")
 
-const STACK_POINTER_SUPPORTED_METHODS = Set{Symbol}()
+# const STACK_POINTER_SUPPORTED_METHODS = Set{Symbol}()
 PaddedMatrices.@support_stack_pointer ∂lsgg
 PaddedMatrices.@support_stack_pointer ∂Gamma
 PaddedMatrices.@support_stack_pointer ∂LKJ
 PaddedMatrices.@support_stack_pointer Normal
 PaddedMatrices.@support_stack_pointer ∂Normal
+PaddedMatrices.@support_stack_pointer Normal_fmadd
+PaddedMatrices.@support_stack_pointer ∂Normal_fmadd
 
 function __init__()
-    for m ∈ (:∂lsgg, :∂Gamma, :∂LKJ, :Normal, :∂Normal)
+    for m ∈ (:∂lsgg, :∂Gamma, :∂LKJ, :Normal, :∂Normal, :Normal_fmadd, :∂Normal_fmadd)
         push!(PaddedMatrices.STACK_POINTER_SUPPORTED_METHODS, m)
     end
 end
