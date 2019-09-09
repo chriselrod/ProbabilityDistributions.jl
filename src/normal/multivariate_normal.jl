@@ -2255,10 +2255,13 @@ function ∂multivariate_normal_SMLT_quote(
         end
     end
     if track_X | track_β
+        # push!(q.args, :(@show A))
+        # push!(q.args, :(@show X))
         f = μmy ?  :(PaddedMatrices.nmul!) : :(LinearAlgebra.mul!)
         track_X && push!(q.args, Expr(:call, f, :∂X, :A, :(β')))
         if track_β
             push!(q.args, Expr(:call, f, :∂β, :(X'), :A))
+            # push!(q.args, :(@show ∂β))
             if βdim == 1
                 push!(q.args, Expr(:call, :sum!, :∂βv, :∂β))
             end

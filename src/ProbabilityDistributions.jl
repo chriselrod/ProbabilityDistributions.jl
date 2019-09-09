@@ -5,7 +5,7 @@ using   SIMDPirates, SLEEFPirates, SpecialFunctions, DistributionParameters,
         VectorizationBase, LoopVectorization
 
 using PaddedMatrices: StackPointer, DynamicPtrMatrix,
-    AbstractFixedSizePaddedVector, AbstractFixedSizePaddedMatrix, AbstractPaddedMatrix,
+    AbstractFixedSizePaddedVector, AbstractFixedSizePaddedMatrix, AbstractFixedSizePaddedArray, AbstractPaddedMatrix,
     AbstractMutableFixedSizePaddedVector, AbstractMutableFixedSizePaddedMatrix,
     AbstractMutableFixedSizePaddedArray, simplify_expr
 using ScatteredArrays: AbstractScatteredArray
