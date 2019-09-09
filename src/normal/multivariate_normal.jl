@@ -320,7 +320,6 @@ end
 end
 
 
-
 function loadδ_quote(
     R::Int, C::Int, K::Union{Symbol,Int}, T::DataType,
     Bstride::Union{Int,Symbol}, Bsym::Symbol,
@@ -722,7 +721,7 @@ function loadδfnmadd_quote(
     # μstride == -1, then we do have an intercept term which we can use for (y - μ)
     # if βdim == 1, then we can reorder the single subtraction
     if peel_first_iter
-        xloadexpr = :(SIMDPirates.vload($V, $xsym + $size_T, $masksym))
+        xloadexpr = :(SIMDPirates.vload($V, $xsym, $masksym))
         push!(q.args, :(vx_0 = $xloadexpr))
     end
     f = μmy ? :(SIMDPirates.vfmsub) : :(SIMDPirates.vfnmadd)
@@ -1100,6 +1099,7 @@ function multivariate_normal_SMLT_quote(
     simplify_expr(q)
 end
 
+
 @generated function Normal(
     Y::AbstractMutableFixedSizePaddedMatrix{M,P,T,PY},
     L::AbstractLowerTriangularMatrix{P,T},
@@ -1303,8 +1303,8 @@ end
         throw("Type of μ == $A is not recognized.")
     end
     quote
-        M = size(Y,1)
-        PY = $(Y <: Array ? M : :(stride(Y,2)))
+        $M = size(Y,1)
+        $PY = $(Y <: Array ? M : :(stride(Y,2)))
         $q
     end
 end
@@ -1320,9 +1320,9 @@ end
     M, PY, PX = gensym(:M), gensym(:PY), gensym(:PX)
     q = multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, βstride = Pβ, Xstride = PX, βdim = Nβ, XP = K_)
     quote
-        M = size(Y,1)
-        PY = $(Y <: Array ? M : :(stride(Y,2)))
-        PX = $(X <: Array ? M : :(stride(X,R)))
+        $M = size(Y,1)
+        $PY = $(Y <: Array ? M : :(stride(Y,2)))
+        $PX = $(X <: Array ? M : :(stride(X,2)))
         $q
     end
 end
@@ -1338,9 +1338,9 @@ end
     M, PY, PX = gensym(:M), gensym(:PY), gensym(:PX)
     q = multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, βstride = Pβ, Xstride = PX, βdim = Nβ, XP = K_)
     quote
-        M = size(Y,1)
-        PY = $(Y <: Array ? M : :(stride(Y,2)))
-        PX = $(X <: Array ? M : :(stride(X,2)))
+        $M = size(Y,1)
+        $PY = $(Y <: Array ? M : :(stride(Y,2)))
+        $PX = $(X <: Array ? M : :(stride(X,2)))
         $q
     end
 end
@@ -1370,9 +1370,9 @@ end
         throw("Type of μ == $A is not recognized.")
     end
     quote
-        M = size(Y,1)
-        MP = $(Y <: Array ? M : :(stride(Y,2)))
-        PX = $(X <: Array ? M : :(stride(X,2)))
+        $M = size(Y,1)
+        $PY = $(Y <: Array ? M : :(stride(Y,2)))
+        $PX = $(X <: Array ? M : :(stride(X,2)))
         $q
     end
 end
@@ -1399,13 +1399,12 @@ end
         throw("Type of μ == $A is not recognized.")
     end
     quote
-        M = size(Y,1)
-        PY = $(Y <: Array ? M : :(stride(Y,2)))
-        PX = $(X <: Array ? M : :(stride(X,2)))
+        $M = size(Y,1)
+        $PY = $(Y <: Array ? M : :(stride(Y,2)))
+        $PX = $(X <: Array ? M : :(stride(X,2)))
         $q
     end
 end
-
 
 
 function track_mu_store(Mk::Int,Nk,T,μdim,μmy,W,Wshift,μstride,track_Y,μtransposed,initialize::Bool=false)
@@ -2275,7 +2274,6 @@ end
 
 
 
-
 @generated function ∂Normal(
     Y::AbstractMutableFixedSizePaddedMatrix{M,P,T,PY},
     L::AbstractLowerTriangularMatrix{P,T},
@@ -2338,8 +2336,8 @@ end
     β::AbstractMutableFixedSizePaddedArray{Sβ,T,Nβ,Pβ},
     L::AbstractLowerTriangularMatrix{P,T},
     ::Val{track} = Val{(true,true,true,true)}()
-) where {M,P,T,track,PY,PX,Sβ,Nβ,Pβ,K_}
-# ) where {M,P,T,track,K_,PY,PX,Sβ,Nβ,Pβ}
+# ) where {M,P,T,track,PY,PX,Sβ,Nβ,Pβ,K_}
+) where {M,P,T,track,K_,PY,PX,Sβ,Nβ,Pβ}
     @assert Sβ.parameters[1] == K_
     ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, Xstride = PX, βstride = Pβ, βdim = Nβ, XP = K_)
 end
@@ -2485,6 +2483,23 @@ end
     end
 end
 
+# @generated function Normal(
+    # Y::AbstractMatrix{T},
+    # X::AbstractMatrix{T},
+    # β::AbstractMutableFixedSizePaddedArray{Sβ,T,Nβ,Pβ},
+    # L::AbstractLowerTriangularMatrix{P,T},
+    # ::Val{track} = Val{(true,true,true,true)}()
+# ) where {P,T,track,PK,Sβ,Nβ,Pβ}
+    # K_ = Sβ.parameters[1]
+    # M, PY, PX = gensym(:M), gensym(:PY), gensym(:PX)
+    # q = multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, βstride = Pβ, Xstride = PX, βdim = Nβ, XP = K_)
+    # quote
+        # $M = size(Y,1)
+        # $PY = $(Y <: Array ? M : :(stride(Y,2)))
+        # $PX = $(X <: Array ? M : :(stride(X,R)))
+        # $q
+    # end
+# end
 
 @generated function ∂Normal(
     Y::AbstractMatrix{T},

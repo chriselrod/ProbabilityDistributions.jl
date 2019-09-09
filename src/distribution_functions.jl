@@ -402,13 +402,13 @@ function gamma_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_�
     end
     if αisvec
         αexpr = :(α[i])
-        lgammaαexpr = :(SpecialFunctions.lgamma(α[i]))
+        lgammaαexpr = :(first(SpecialFunctions.logabsgamma(α[i])))
         αm1expr = :(α[i] - one(eltype(α)))
     else
         αexpr = :α
         lgammaαexpr = :(lgammaα)
         αm1expr = :(αm1)
-        push!(pre_quote.args, :(lgammaα = SpecialFunctions.lgamma(α)))
+        push!(pre_quote.args, :(lgammaα = first(SpecialFunctions.logabsgamma(α))))
         push!(pre_quote.args, :(αm1 = α - one(eltype(α))))
     end
     if βisvec

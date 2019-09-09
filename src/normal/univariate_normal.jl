@@ -198,7 +198,7 @@ function univariate_normal_quote(
             if yisvec
                 push!(loop_expr.args, :(∂y[i] = - δσ⁻¹ * σ⁻¹))
                 if sp
-                    push!(pre_quote.args, :(∂y = PtrVector{$M,$T,$M,$M}(_sptr)))
+                    push!(pre_quote.args, :(∂y = PtrVector{$M,$T}(_sptr)))
                     push!(pre_quote.args, :(_sptr += $(VectorizationBase.align(M*sizeof(T)))))
                     push!(return_expr.args, :(∂y'))
                 else
@@ -216,7 +216,7 @@ function univariate_normal_quote(
             if μisvec == true
                 push!(loop_expr.args, :(∂μ[i] = δσ⁻¹ * σ⁻¹))
                 if sp
-                    push!(pre_quote.args, :(∂μ = PtrVector{$M,$T,$M,$M}(_sptr)))
+                    push!(pre_quote.args, :(∂μ = PtrVector{$M,$T}(_sptr)))
                     push!(pre_quote.args, :(_sptr += $(VectorizationBase.align(M*sizeof(T)))))
                     push!(return_expr.args, :(∂μ'))
                 else
@@ -233,7 +233,7 @@ function univariate_normal_quote(
             if σisvec == true
                 push!(loop_expr.args, :(∂σ[i] = δσ⁻² * σ⁻¹ - σ⁻¹ ))
                 if sp
-                    push!(pre_quote.args, :(∂σ = PtrVector{$M,$T,$M,$M}(_sptr)))
+                    push!(pre_quote.args, :(∂σ = PtrVector{$M,$T}(_sptr)))
                     push!(pre_quote.args, :(_sptr += $(VectorizationBase.align(M*sizeof(T)))))
                     push!(return_expr.args, :(∂σ'))
                 else
