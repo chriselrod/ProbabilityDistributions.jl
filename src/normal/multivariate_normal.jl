@@ -1902,7 +1902,7 @@ function ∂multivariate_normal_SMLT_quote(
                 Astride = Mk
                 sptroff += VectorizationBase.align(size_T*Mk*P)
             else# We do create a full-sized (size(A) == size(Y)) A-matrix
-                Astride = M isa Integer ? VectorizationBase.align(M, W) : M
+                Astride = M isa Integer ? VectorizationBase.align(M, W) : :_A_stride_
                 # Therefore, we must increment through row iterations
                 push!(row_increments.args, :(ptrA += $(size_T*Mk)))
                 push!(row_increments_rem.args, :(ptrA += $(size_T*W)))
@@ -2051,7 +2051,7 @@ function ∂multivariate_normal_SMLT_quote(
                 Astride = Mk
                 sptroff += VectorizationBase.align(size_T*Mk*P)
             else# We do create a full-sized (size(A) == size(Y)) A-matrix
-                Astride = M isa Integer ? VectorizationBase.align(M, W) : M
+                Astride = M isa Integer ? VectorizationBase.align(M, W) : M#:_A_stride_
                 # Therefore, we must increment through row iterations
                 push!(row_increments.args, :(ptrA += $(size_T*Mk)))
                 push!(row_increments_rem.args, :(ptrA += $(size_T*W)))

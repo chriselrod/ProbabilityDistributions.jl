@@ -51,7 +51,12 @@ function distribution_diff_rule!(mod, first_pass, second_pass, tracked_vars, out
             push!(first_pass.args, :(println($printstring)))
         end
         push!(first_pass.args, :($function_output = $(mod).$(Symbol(:∂, f))($(A...), Val{$track_tup}())))
-        verbose && push!(first_pass.args, :(println($out)))
+        if verbose
+            push!(first_pass.args, :(@show $out))
+            for a ∈ A
+                a ∈ tracked_vars && push!(first_pass.args, :(@show $(Symbol("###adjoint###_##∂", out, "##∂", a, "##"))))
+            end
+        end
 ##        ret_string  = "function: $f: (ret"
 ##        push!(first_pass.args, :(println($ret_string, $function_output)))
     end
@@ -212,15 +217,15 @@ end
 
 push!(DISTRIBUTION_DIFF_RULES, :Bernoulli_logit_fmadd)
 
-function ∂Bernoulli_logit_fnmadd_quote()
+# function ∂Bernoulli_logit_fnmadd_quote()
 
-end
-function ∂Bernoulli_logit_fmsub_quote()
+# end
+# function ∂Bernoulli_logit_fmsub_quote()
 
-end
-function ∂Bernoulli_logit_fnmsub_quote()
+# end
+# function ∂Bernoulli_logit_fnmsub_quote()
 
-end
+# end
 
 
 @generated function LKJ(L::AbstractLKJCorrCholesky{N,T}, η::T, ::Val{track}) where {N,T,track}
