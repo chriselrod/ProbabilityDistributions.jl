@@ -1,8 +1,8 @@
 module ProbabilityDistributions
 
 using   SIMDPirates, SLEEFPirates, SpecialFunctions, DistributionParameters,
-        PaddedMatrices, StructuredMatrices, ScatteredArrays, StaticArrays, LinearAlgebra,
-        VectorizationBase, LoopVectorization
+        PaddedMatrices, StructuredMatrices, ScatteredArrays, LinearAlgebra,
+        VectorizationBase, LoopVectorization, StackPointers
 
 using PaddedMatrices: StackPointer, DynamicPtrMatrix,
     AbstractFixedSizePaddedVector, AbstractFixedSizePaddedMatrix, AbstractFixedSizePaddedArray, AbstractPaddedMatrix,
@@ -30,18 +30,10 @@ include("normal/multivariate_normal.jl")
 include("normal/matrix_normal.jl")
 
 # const STACK_POINTER_SUPPORTED_METHODS = Set{Symbol}()
-PaddedMatrices.@support_stack_pointer ∂lsgg
-PaddedMatrices.@support_stack_pointer ∂Gamma
-PaddedMatrices.@support_stack_pointer ∂LKJ
-PaddedMatrices.@support_stack_pointer Normal
-PaddedMatrices.@support_stack_pointer ∂Normal
-PaddedMatrices.@support_stack_pointer Normal_fmadd
-PaddedMatrices.@support_stack_pointer ∂Normal_fmadd
+@def_stackpointer_fallback ∂lsgg ∂Gamma ∂LKJ Normal ∂Normal Normal_fmadd ∂Normal_fmadd
 
 function __init__()
-    for m ∈ (:∂lsgg, :∂Gamma, :∂LKJ, :Normal, :∂Normal, :Normal_fmadd, :∂Normal_fmadd)
-        push!(PaddedMatrices.STACK_POINTER_SUPPORTED_METHODS, m)
-    end
+    @add_stackpointer_method ∂lsgg ∂Gamma ∂LKJ Normal ∂Normal Normal_fmadd ∂Normal_fmadd
 end
 
 end # module
