@@ -361,10 +361,18 @@ function loadδ_quote(
         for c ∈ 0:C-1            
             vμ_c = μdim == 0 ? μsym : Symbol(:vμ_, c)
             if μdim == 1
-                if K isa Symbol
-                    push!(q.args, Expr(:(=), vμ_c, :(SIMDPirates.vbroadcast($V, $μsym + $size_T*$μstride)*($c+$K))))
+                if μstride isa Symbol
+                    if K isa Symbol
+                        push!(q.args, Expr(:(=), vμ_c, :(SIMDPirates.vbroadcast($V, $μsym + $size_T*$μstride*($c+$K)))))
+                    else
+                        push!(q.args, Expr(:(=), vμ_c, :(SIMDPirates.vbroadcast($V, $μsym + $size_T*$(c + K)*$μstride))))
+                    end
                 else
-                    push!(q.args, Expr(:(=), vμ_c, :(SIMDPirates.vbroadcast($V, $μsym + $size_T*$(c + K)*$μstride))))
+                    if K isa Symbol
+                        push!(q.args, Expr(:(=), vμ_c, :(SIMDPirates.vbroadcast($V, $μsym + $(size_T*μstride)*($c+$K)))))
+                    else
+                        push!(q.args, Expr(:(=), vμ_c, :(SIMDPirates.vbroadcast($V, $μsym + $(size_T*μstride)*$(c + K)))))
+                    end
                 end
             end
             if (μdim == 1 && μtransposed) || μdim == 0
@@ -1097,6 +1105,7 @@ function multivariate_normal_SMLT_quote(
     push!(q.args, Expr(:(=), :δ²_0, :(SIMDPirates.vmul(SIMDPirates.vbroadcast($V, $(T(-0.5))), δ²_0))))
     sp ? push!(q.args, :((sptr,δ²_0))) : push!(q.args, :δ²_0)
     simplify_expr(q)
+    # q
 end
 
 
