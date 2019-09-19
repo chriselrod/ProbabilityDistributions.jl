@@ -511,7 +511,7 @@ function loadδ_quote(
                 end
             elseif μdim == 1 && !μtransposed
                 # Only need to mask if we're on last column
-                yloadexpr = :(SIMDPirates.vload($V, BsymK + $size_T * $c*$Bstride, $mask ))
+                yloadexpr = :(SIMDPirates.vload($V, BsymK + $size_T * $c*$Bstride, $masksym ))
                 if μmy
                     push!(q.args, :($(Symbol(:A_0_,c)) = SIMDPirates.vsub(vμ_0, $yloadexpr)))
                 else
