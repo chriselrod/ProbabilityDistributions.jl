@@ -154,7 +154,7 @@ end
             $(Symbol(:ncol_,k)) = size($(Symbol(:Y_,k)),2)
             $(Symbol(:coloffset_,k)) = $(Symbol(:coloffset_,k-1)) + $(Symbol(:ncol_,k))
             $(Symbol(:∂Y_,k)) = view( Σ⁻¹δ, :, $(Symbol(:coloffset_,k-1))+1:$(Symbol(:coloffset_,k)) )
-            $(Symbol(:∂μ_,k)) = PtrVector{$P,$T,$R,$R}( ptr_δ + $(sizeof(T)*R*(k-1)))
+            $(Symbol(:∂μ_,k)) = PtrVector{$P,$T,$R}( ptr_δ + $(sizeof(T)*R*(k-1)))
         end
         push!(q.args, setup_quote)
     end
@@ -1006,7 +1006,7 @@ function multivariate_normal_SMLT_quote(
         $(Expr(:meta,:inline)) # because of allignment bug
 #        B = Badj.parent
         $([Expr(:(=), Symbol(:δ²_,m), :(SIMDPirates.vbroadcast($V, zero($T)))) for m ∈ 0:Mk2-1]...)
-        invdiag = $(sp ? :(PtrVector{$P,$T,$P,$P,true}(pointer(sptr,$T))) : :(MutableFixedSizePaddedVector{$P,$T,$P,$P}(undef)))
+        invdiag = $(sp ? :(PtrVector{$P,$T,$P,true}(pointer(sptr,$T))) : :(MutableFixedSizePaddedVector{$P,$T,$P,$P}(undef)))
         $(macroexpand(LoopVectorization, quote
                       @vvectorize $T for p ∈ 1:$P
                       $loopbody
@@ -1838,12 +1838,12 @@ function ∂multivariate_normal_SMLT_quote(
         ∂LL = VectorizationBase.align(StructuredMatrices.binomial2(P + 1), W)
         if sp
             push!(array_allocations.args, :(∂L = StructuredMatrices.PtrLowerTriangularMatrix{$P,$T,$∂LL}(_sptr)))
-            push!(array_allocations.args, :(invdiag = PtrVector{$P,$T,$P,$P}(_sptr)))
+            push!(array_allocations.args, :(invdiag = PtrVector{$P,$T,$P}(_sptr)))
             push!(array_allocations.args, :(_sptr += $(∂LL*size_T)))
         else
             push!(array_allocations.args, :(v∂L = StructuredMatrices.MutableLowerTriangularMatrix{$P,$V,$∂LL}(undef)))
             push!(array_allocations.args, :(∂L = StructuredMatrices.MutableLowerTriangularMatrix{$P,$T,$∂LL}(undef)))
-            push!(array_allocations.args, :(invdiag = PtrVector{$P,$T,$P,$P}(pointer(∂L))))
+            push!(array_allocations.args, :(invdiag = PtrVector{$P,$T,$P}(pointer(∂L))))
         end
     elseif !sp
         push!(array_allocations.args, :(invdiag = MutableFixedSizePaddedVector{$P,$T,$invdiagL,$invdiagL}(undef)))
@@ -1881,7 +1881,6 @@ function ∂multivariate_normal_SMLT_quote(
             if (μdim == 1) && !(track_Y || track_X || track_β) # We do not track or store all of A, so we make it a MK x P block to hold a single set of iterations across columns
                 if μtransposed
                     Aquote = quote
-#                        ∂μ = PtrVector{$P,$T,$invdiagL,$invdiagL}(_sptr)
                         ∂μ = PtrVector{$P,$T}(_sptr)
                         ptr∂μ = _sptr
                         _sptr += $(invdiagL*size_T)
@@ -1894,7 +1893,6 @@ function ∂multivariate_normal_SMLT_quote(
                         ML = VectorizationBase.align(M, W)
                         quote
                             ∂μ = PtrVector{$M,$T}(_sptr)
-#                            ∂μ = PtrVector{$M,$T,$ML,$ML}(_sptr)
                             ptr∂μ = _sptr
                             _sptr += $(ML*size_T)
                         end
@@ -1953,7 +1951,6 @@ function ∂multivariate_normal_SMLT_quote(
                     if μdim == 1
                         if μtransposed
                             delay_alloc = true
-#                            push!(Aquote.args, :(∂μ = PtrVector{$P,$T,$invdiagL,$invdiagL}(_sptr); ptr∂μ = _sptr))
                             push!(Aquote.args, :(∂μ = PtrVector{$P,$T}(_sptr); ptr∂μ = _sptr))
                             push!(Aquote.args, :(_sptr += $(invdiagL*size_T)))
                             push!(delayed_allocation_quote.args, :(v∂μ = PtrMatrix{$W,$P,$T,$W,$(W*P)}(_sptr))) # accmulate in v∂μ; reduce at end
@@ -1961,7 +1958,6 @@ function ∂multivariate_normal_SMLT_quote(
                             sptroff = W*P*size_T
                         else#if !μtransposed
                             if M isa Integer
-#                                push!(Aquote.args, :(∂μ = PtrVector{$M,$T,$Astride,$Astride}(_sptr); ptr∂μ = _sptr))
                                 push!(Aquote.args, :(∂μ = PtrVector{$M,$T}(_sptr); ptr∂μ = _sptr))
                                 push!(Aquote.args, :(_sptr += $(Astride*size_T)))
                             else#if M isa Symbol
@@ -2028,7 +2024,7 @@ function ∂multivariate_normal_SMLT_quote(
         if track_L
             push!(Aquote.args, :(v∂L = StructuredMatrices.PtrLowerTriangularMatrix{$P,$V,$∂LL}( $final_offset_expr )))
         else # allocate invdiagL at the end
-            push!(Aquote.args, :(invdiag = PtrVector{$P,$T,$invdiagL,$invdiagL}( $final_offset_expr )))
+            push!(Aquote.args, :(invdiag = PtrVector{$P,$T,$invdiagL}( $final_offset_expr )))
         end        
     else#if !sp
         # Life is easier if we don't use our own stack, because
@@ -2060,15 +2056,11 @@ function ∂multivariate_normal_SMLT_quote(
                 Astride = Mk
                 sptroff += VectorizationBase.align(size_T*Mk*P)
             else# We do create a full-sized (size(A) == size(Y)) A-matrix
-                Astride = M isa Integer ? VectorizationBase.align(M, W) : M#:_A_stride_
+                Astride = M isa Integer ? VectorizationBase.align(M, W) : M
                 # Therefore, we must increment through row iterations
                 push!(row_increments.args, :(ptrA += $(size_T*Mk)))
                 push!(row_increments_rem.args, :(ptrA += $(size_T*W)))
-                Aquote = quote end# : quote _A_stride_ = VectorizationBase.align($M,$W) end
-                #if track_Y || (track_μ && (μdim == 2))
-                    # if track_Y, A is ∂Y
-                    # otherwise, if track_μ && (μdim == 2), A is ∂μ
-                    # if none of these, we allocate A later.
+                Aquote = quote end
                 push!(Aquote.args, M isa Integer ? :(A = MutableFixedSizePaddedMatrix{$M,$P,$T,$Astride}(undef)) : :(A = Matrix{$T}(undef, $M,$P)) )
                 push!(Aquote.args, :(ptrA = pointer(A)))
                 #end
@@ -2085,7 +2077,7 @@ function ∂multivariate_normal_SMLT_quote(
                             push!(Aquote.args, :(ptrv∂μ = pointer(v∂μ)))
                         else#if !μtransposed
                             if M isa Integer
-                                push!(Aquote.args, :(∂μ = MutableFixedSizePaddedVector{$M,$T,$Astride,$Astride}(undef)))
+                                push!(Aquote.args, :(∂μ = MutableFixedSizePaddedVector{$M,$T,$Astride}(undef)))
                             else#if M isa Symbol
                                 push!(Aquote.args, :(∂μ = Vector{$T}(undef, $M)))
                             end

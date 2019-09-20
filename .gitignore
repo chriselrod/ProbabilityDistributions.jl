@@ -4,3 +4,6 @@
 .DS_Store
 /docs/build/
 /docs/site/
+*~
+src/#*#
+tests/#*#
