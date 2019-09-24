@@ -1006,7 +1006,7 @@ function multivariate_normal_SMLT_quote(
         $(Expr(:meta,:inline)) # because of allignment bug
 #        B = Badj.parent
         $([Expr(:(=), Symbol(:δ²_,m), :(SIMDPirates.vbroadcast($V, zero($T)))) for m ∈ 0:Mk2-1]...)
-        invdiag = $(sp ? :(PtrVector{$P,$T,$P,true}(pointer(sptr,$T))) : :(MutableFixedSizePaddedVector{$P,$T,$P,$P}(undef)))
+        invdiag = $(sp ? :(PtrVector{$P,$T,$P,true}(pointer(sptr,$T))) : :(MutableFixedSizePaddedVector{$P,$T,$P}(undef)))
         $(macroexpand(LoopVectorization, quote
                       @vvectorize $T for p ∈ 1:$P
                       $loopbody
@@ -1131,8 +1131,8 @@ end
     μ::Tμ,
     L::AbstractLowerTriangularMatrix{P,T},
     ::Val{track} = Val{(true,true,true)}()
-) where {M,P,T,PY,Tμ,track}
-# ) where {M,P,T,track,PY,Tμ}
+# ) where {M,P,T,PY,Tμ,track}
+) where {M,P,T,track,PY,Tμ}
     if Tμ === T
         multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, μdim = 0, μstride = 0)
     elseif Tμ <: LinearAlgebra.Adjoint
@@ -1171,8 +1171,8 @@ end
     β::AbstractMutableFixedSizePaddedArray{Sβ,T,Nβ,Pβ},
     L::AbstractLowerTriangularMatrix{P,T},
     ::Val{track} = Val{(true,true,true,true)}()
-# ) where {M,P,T,track,PY,PX,PK,K_,Sβ,Nβ,Pβ}
-) where {M,P,T,track,PY,PX,PK,Sβ,Nβ,Pβ,K_}
+) where {M,P,T,track,PY,PX,PK,K_,Sβ,Nβ,Pβ}
+# ) where {M,P,T,track,PY,PX,PK,Sβ,Nβ,Pβ,K_}
     @assert Sβ.parameters[1] == K_
     multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, βstride = Pβ, Xstride = PX, βdim = Nβ, XP = K_)
 end
@@ -1199,8 +1199,8 @@ end
     μ::Tμ,
     L::AbstractLowerTriangularMatrix{P,T},
     ::Val{track} = Val{(true,true,true,true,true)}()
-) where {M,P,T,track,PY,PX,K_,Sβ,Nβ,Pβ,Tμ}
-# ) where {M,P,T,track,PY,PX,Sβ,Nβ,Pβ,Tμ,K_}
+# ) where {M,P,T,track,PY,PX,K_,Sβ,Nβ,Pβ,Tμ}
+) where {M,P,T,track,PY,PX,Sβ,Nβ,Pβ,Tμ,K_}
     @assert Sβ.parameters[1] == K_
     if Tμ === T
         multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, βstride = Pβ, Xstride = PX, βdim = Nβ, XP = K_, μdim = 0, μstride = 0)
@@ -1272,8 +1272,8 @@ end
     μ::Tμ,
     L::AbstractLowerTriangularMatrix{P,T},
     ::Val{track} = Val{(true,true,true)}()
-# ) where {P,T,track,Tμ}
-) where {P,T,Tμ,track}
+) where {P,T,track,Tμ}
+# ) where {P,T,Tμ,track}
     M, PY = gensym(:M), gensym(:PY)
     defs_quote = quote
         $M = size(Y,1)
@@ -1846,7 +1846,7 @@ function ∂multivariate_normal_SMLT_quote(
             push!(array_allocations.args, :(invdiag = PtrVector{$P,$T,$P}(pointer(∂L))))
         end
     elseif !sp
-        push!(array_allocations.args, :(invdiag = MutableFixedSizePaddedVector{$P,$T,$invdiagL,$invdiagL}(undef)))
+        push!(array_allocations.args, :(invdiag = MutableFixedSizePaddedVector{$P,$T,$invdiagL}(undef)))
     end
     row_increments = quote
         ptrY += $(size_T*Mk)
