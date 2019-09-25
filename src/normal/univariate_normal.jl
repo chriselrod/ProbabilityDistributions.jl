@@ -279,32 +279,17 @@ function univariate_normal_quote(
     simplify_expr(q)
 end
 
-# @generated function Normal(y::AbstractFixedSizePaddedVector{M,T}, ::Val{track}) where {M,T,track}
-#     univariate_normal_quote( M, T, true, nothing, nothing, (track[1], false, false), false, true)
-# end
 @generated function Normal(y::T, ::Val{track}) where {track,T <: Real}
     univariate_normal_quote(1, T, false, nothing, nothing, (track[1], false, false), false, true)
 end
-# @generated function Normal(y::AbstractFixedSizePaddedVector{M,T}, σ::Union{T,Int}, ::Val{track}) where {T <: Real, M, track}
-#     univariate_normal_quote(
-#         M, T, true, nothing, false,
-#         (track[1], false, track[2]), false, true
-#     )
-# end
+
 @generated function Normal(y::T, σ::Union{T,Int}, ::Val{track}) where {T <: Real, track}
     univariate_normal_quote(
         1, T, false, nothing, false,
         (track[1], false, track[2]), false, true
     )
 end
-# @generated function Normal(
-                # y::AbstractFixedSizePaddedVector{M,T},
-                # σ²::Union{LinearAlgebra.UniformScaling{T},LinearAlgebra.UniformScaling{Int}}, ::Val{track})::T where {T <: Real, M, track}
-    # univariate_normal_quote(
-        # M, T, true, nothing, false,
-        # (track[1], false, track[2]), false, false
-    # )
-# end
+
 @generated function Normal(
     y::T, σ²::LinearAlgebra.UniformScaling{T}, ::Val{track}
 ) where {T <: Real, track}
@@ -320,65 +305,18 @@ end
 #) where {T <: Real, track}
     univariate_normal_quote( 1, T, false, false, false, track, false, true)
 end
-# @generated function Normal(
-    # y::AbstractFixedSizePaddedVector{M,T},
-    # μ::Union{T,Int,<:AbstractFixedSizePaddedVector{M,T}},
-    # σ::Union{T,Int,<:AbstractFixedSizePaddedVector{M,T}},
-    # ::Val{track}
-# ) where {M, T <: Real, track}
-    # univariate_normal_quote( M, T, true,
-        # μ <: AbstractFixedSizePaddedVector, σ <: AbstractFixedSizePaddedVector, track, false, true
-    # )
-# end
-# @generated function Normal(
-    # y::T,
-    # μ::AbstractFixedSizePaddedVector{M,T},
-    # σ::Union{T,Int,<:AbstractFixedSizePaddedVector{M,T}},
-    # ::Val{track}
-# ) where {M, T <: Real, track}
-    # univariate_normal_quote( M, T, false,
-        # true, σ <: AbstractFixedSizePaddedVector, track, false, true
-    # )
-# end
-# @generated function Normal(
-    # y::T,
-    # μ::Union{T,Int},
-    # σ::AbstractFixedSizePaddedVector{M,T},
-    # ::Val{track}
-# ) where {M, T <: Real, track}
-    # univariate_normal_quote( M, T, false, false, true, track, false, true)
-# end
-    
-# @generated function ∂Normal(y::AbstractFixedSizePaddedVector{M,T}, ::Val{track}) where {M,T,track}
-    # univariate_normal_quote( M, T, true, nothing, nothing, (track[1], false, false), true, true)
-# end
+
 @generated function ∂Normal(y::T, ::Val{track}) where {track,T <: Real}
     univariate_normal_quote(1, T, false, nothing, nothing, (track[1], false, false), true, true)
 end
-# @generated function ∂Normal(
-    # y::AbstractFixedSizePaddedVector{M,T}, σ::Union{T,Int}, ::Val{track}
-# ) where {M, T <: Real, track}
-# ) where {M, track, T <: Real}
-    # univariate_normal_quote(
-        # M, T, true, nothing, false,
-        # (track[1], false, track[2]), true, true
-    # )
-# end
+
 @generated function ∂Normal(y::T, σ::Union{T,Int}, ::Val{track}) where {T <: Real, track}
     univariate_normal_quote(
         1, T, false, nothing, false,
         (track[1], false, track[2]), true, true
     )
 end
-# @generated function ∂Normal(
-    # y::AbstractFixedSizePaddedVector{M,T},
-    # σ²::Union{LinearAlgebra.UniformScaling{T},LinearAlgebra.UniformScaling{Int}}, ::Val{track}
-# ) where {M, T <: Real, track}
-    # univariate_normal_quote(
-        # M, T, true, nothing, false,
-        # (track[1], false, track[2]), true, false
-    # )
-# end
+
 @generated function ∂Normal(
     y::T, σ²::Union{LinearAlgebra.UniformScaling{T},LinearAlgebra.UniformScaling{Int}}, ::Val{track}
 ) where {T <: Real, track}
@@ -394,125 +332,24 @@ end
 #) where {T <: Real,track}
     univariate_normal_quote( 1, T, false, false, false, track, true, true)
 end
-# @generated function ∂Normal(
-    # y::AbstractFixedSizePaddedVector{M,T},
-    # μ::Union{T,Int,<:AbstractFixedSizePaddedVector{M,T}},
-    # σ::Union{T,Int,<:AbstractFixedSizePaddedVector{M,T}},
-    # ::Val{track}
-# ) where {M, T <: Real, track}
-# ) where {M, track, T <: Real}
-    # univariate_normal_quote(
-        # M, T, true,
-        # μ <: AbstractFixedSizePaddedVector, σ <: AbstractFixedSizePaddedVector, track, true, true
-    # )
-# end
-# @generated function ∂Normal(
-    # y::T,
-    # μ::AbstractFixedSizePaddedVector{M,T},
-    # σ::Union{T,Int,<:AbstractFixedSizePaddedVector{M,T}},
-    # ::Val{track}
-# ) where {M, T <: Real, track}
-    # univariate_normal_quote(
-        # M, T, false,
-        # true, σ <: AbstractFixedSizePaddedVector, track, true, true
-    # )
-# end
-# @generated function ∂Normal(
-    # y::T,
-    # μ::Union{T,Int},
-    # σ::AbstractFixedSizePaddedVector{M,T},
-    # ::Val{track}
-# ) where {M, T <: Real, track}
-    # univariate_normal_quote( M, T, false, false, true, track, true, true)
-# end
 
-# @generated function ∂Normal(
-    # sp::StackPointer,
-    # y::AbstractFixedSizePaddedVector{M,T},
-    # ::Val{track}
-# ) where {M,T,track}
-    # univariate_normal_quote( M, T, true, nothing, nothing, (track[1], false, false), true, true, true)
-# end
-# @generated function ∂Normal(
-    # sp::StackPointer,
-    # y::AbstractFixedSizePaddedVector{M,T},
-    # σ::Union{T,Int},
-    # ::Val{track}
-# ) where {M, T <: Real, track}
-# ) where {M, track, T <: Real}
-    # univariate_normal_quote(
-        # M, T, true, nothing, false,
-        # (track[1], false, track[2]), true, true, true
-    # )
-# end
-# @generated function ∂Normal(
-    # sp::StackPointer,
-    # y::AbstractFixedSizePaddedVector{M,T},
-    # σ²::Union{LinearAlgebra.UniformScaling{T},LinearAlgebra.UniformScaling{Int}},
-    # ::Val{track}
-# ) where {M, T <: Real, track}
-    # univariate_normal_quote(
-        # M, T, true, nothing, false,
-        # (track[1], false, track[2]), true, false, true
-    # )
-# end
-# @generated function ∂Normal(
-    # sp::StackPointer,
-    # y::AbstractFixedSizePaddedVector{M,T},
-    # μ::Union{T,Int,<:AbstractFixedSizePaddedVector{M,T}},
-    # σ::Union{T,Int,<:AbstractFixedSizePaddedVector{M,T}},
-    # ::Val{track}
-#) where {M, T <: Real, track}
-# ) where {M, track, T <: Real}
-    # univariate_normal_quote(
-        # M, T, true,
-        # μ <: AbstractFixedSizePaddedVector, σ <: AbstractFixedSizePaddedVector, track, true, true, true
-    # )
-# end
-# @generated function ∂Normal(
-    # sp::StackPointer,
-    # y::T,
-    # μ::AbstractFixedSizePaddedVector{M,T},
-    # σ::Union{T,Int,<:AbstractFixedSizePaddedVector{M,T}},
-    # ::Val{track}
-# ) where {M, T <: Real, track}
-    # univariate_normal_quote(
-        # M, T, false,
-        # true, σ <: AbstractFixedSizePaddedVector, track, true, true, true
-    # )
-# end
-# @generated function ∂Normal(
-    # sp::StackPointer,
-    # y::T,
-    # μ::Union{T,Int},
-    # σ::AbstractFixedSizePaddedVector{M,T},
-    # ::Val{track}
-# ) where {M, T <: Real, track}
-    # univariate_normal_quote( M, T, false, false, true, track, true, true, true)
-# end
-
-
-
-
-
-@generated function Normal(y::AbstractFixedSizePaddedArray{S,T,N,R,L}, ::Val{track}) where {S,T,N,R,L,track}
-    SV = S.parameters
+@noinline function univariate_normal_length(SV::Core.SimpleVector, N, R, L)
+    fsv = first(SV)::Int
     if N == 1
-        M = first(SV)
+        M = fsv
     else
-        first(SV) == R || throw("Arrays with more than 1 dimension cannot be padded.")
+        fsv == R || throw("Arrays with more than 1 dimension cannot be padded.")
         M = L
     end
+    M
+end
+
+@generated function Normal(y::AbstractFixedSizePaddedArray{S,T,N,R,L}, ::Val{track}) where {S,T,N,R,L,track}
+    M = univariate_normal_length(S.parameters, N, R, L)
     univariate_normal_quote( M, T, true, nothing, nothing, (track[1], false, false), false, true, false )
 end
 @generated function Normal(y::AbstractFixedSizePaddedArray{S,T,N,R,L}, σ::Union{T,Int}, ::Val{track}) where {S,T,N,R,L,track}
-    SV = S.parameters
-    if N == 1
-        M = first(SV)
-    else
-        first(SV) == R || throw("Arrays with more than 1 dimension cannot be padded.")
-        M = L
-    end
+    M = univariate_normal_length(S.parameters, N, R, L)
     univariate_normal_quote(
         M, T, true, nothing, false,
         (track[1], false, track[2]), false, true, false
@@ -523,13 +360,7 @@ end
                 σ²::Union{LinearAlgebra.UniformScaling{T},LinearAlgebra.UniformScaling{Int}},
                 ::Val{track}
 )::T where {S,T,N,R,L,track}
-    SV = S.parameters
-    if N == 1
-        M = first(SV)
-    else
-        first(SV) == R || throw("Arrays with more than 1 dimension cannot be padded.")
-        M = L
-    end
+    M = univariate_normal_length(S.parameters, N, R, L)
     univariate_normal_quote(
         M, T, true, nothing, false,
         (track[1], false, track[2]), false, false, false
@@ -541,13 +372,7 @@ end
     σ::Union{T,Int,<:AbstractFixedSizePaddedArray{S,T,N,R,L}},
     ::Val{track}
 ) where {S,T,N,R,L,track}
-    SV = S.parameters
-    if N == 1
-        M = first(SV)
-    else
-        first(SV) == R || throw("Arrays with more than 1 dimension cannot be padded.")
-        M = L
-    end
+    M = univariate_normal_length(S.parameters, N, R, L)
     univariate_normal_quote( M, T, true,
         μ <: AbstractFixedSizePaddedMatrix, σ <: AbstractFixedSizePaddedMatrix, track, false, true, false
     )
@@ -558,49 +383,21 @@ end
     σ::Union{T,Int,<:AbstractFixedSizePaddedArray{S,T,N,R,L}},
     ::Val{track}
 ) where {S,T,N,R,L,track}
-    SV = S.parameters
-    if N == 1
-        M = first(SV)
-    else
-        first(SV) == R || throw("Arrays with more than 1 dimension cannot be padded.")
-        M = L
-    end
+    M = univariate_normal_length(S.parameters, N, R, L)
     univariate_normal_quote( M, T, false,
         true, σ <: AbstractFixedSizePaddedMatrix, track, false, true, false
     )
 end
-# @generated function Normal(
-#     y::T,
-#     μ::Union{T,Int},
-#     σ::AbstractFixedSizePaddedArray{S,T,N,R,L},
-#     ::Val{track}
-# ) where {S,T,N,R,L,track}
-#     M = first(S.parameters)
-#     N > 1 && M != R && throw("Arrays with more than 1 dimension cannot be padded.")
-#     univariate_normal_quote( M, T, false, false, true, track, false, true, false)
-# end
-    
+
 @generated function ∂Normal(y::AbstractFixedSizePaddedArray{S,T,N,R,L}, ::Val{track}) where {S,T,N,R,L,track}
-    SV = S.parameters
-    if N == 1
-        M = first(SV)
-    else
-        first(SV) == R || throw("Arrays with more than 1 dimension cannot be padded.")
-        M = L
-    end
+    M = univariate_normal_length(S.parameters, N, R, L)
     univariate_normal_quote( M, T, true, nothing, nothing, (track[1], false, false), true, true, false, S)
 end
 @generated function ∂Normal(
     y::AbstractFixedSizePaddedArray{S,T,N,R,L}, σ::Union{T,Int}, ::Val{track}
 #) where {M, T <: Real, track}
 ) where {S,T,N,R,L,track}
-SV = S.parameters
-    if N == 1
-        M = first(SV)
-    else
-        first(SV) == R || throw("Arrays with more than 1 dimension cannot be padded.")
-        M = L
-    end
+    M = univariate_normal_length(S.parameters, N, R, L)
     univariate_normal_quote(
         M, T, true, nothing, false,
         (track[1], false, track[2]), true, true, false, S
@@ -610,13 +407,7 @@ end
     y::AbstractFixedSizePaddedArray{S,T,N,R,L},
     σ²::Union{LinearAlgebra.UniformScaling{T},LinearAlgebra.UniformScaling{Int}}, ::Val{track}
 ) where {S,T,N,R,L,track}
-    SV = S.parameters
-    if N == 1
-        M = first(SV)
-    else
-        first(SV) == R || throw("Arrays with more than 1 dimension cannot be padded.")
-        M = L
-    end
+    M = univariate_normal_length(S.parameters, N, R, L)
     univariate_normal_quote(
         M, T, true, nothing, false,
         (track[1], false, track[2]), true, false, false, S
@@ -628,13 +419,7 @@ end
     σ::Union{T,Int,<:AbstractFixedSizePaddedArray{S,T,N,R,L}},
     ::Val{track}
 ) where {S,T,N,R,L,track}
-    SV = S.parameters
-    if N == 1
-        M = first(SV)
-    else
-        first(SV) == R || throw("Arrays with more than 1 dimension cannot be padded.")
-        M = L
-    end
+    M = univariate_normal_length(S.parameters, N, R, L)
     univariate_normal_quote(
         M, T, true,
         μ <: AbstractFixedSizePaddedMatrix, σ <: AbstractFixedSizePaddedMatrix, track, true, true, false, S
@@ -646,41 +431,20 @@ end
     σ::Union{T,Int,<:AbstractFixedSizePaddedArray{S,T,N,R,L}},
     ::Val{track}
 ) where {S,T,N,R,L,track}
-    SV = S.parameters
-    if N == 1
-        M = first(SV)
-    else
-        first(SV) == R || throw("Arrays with more than 1 dimension cannot be padded.")
-        M = L
-    end
+    M = univariate_normal_length(S.parameters, N, R, L)
     univariate_normal_quote(
         M, T, false,
         true, σ <: AbstractFixedSizePaddedMatrix, track, true, true, false, S
     )
 end
-# @generated function ∂Normal(
-#     y::T,
-#     μ::Union{T,Int},
-#     σ::AbstractFixedSizePaddedArray{S,T,N,R,L},
-#     ::Val{track}
-# ) where {S,T,N,R,L,track}
-#     M = first(S.parameters)
-#     N > 1 && M != R && throw("Arrays with more than 1 dimension cannot be padded.")
-#     univariate_normal_quote( M, T, false, false, true, track, true, true, false, S)
-# end
+
 
 @generated function ∂Normal(
     sp::StackPointer,
     y::AbstractFixedSizePaddedArray{S,T,N,R,L},
     ::Val{track}
 ) where {S,T,N,R,L,track}
-    SV = S.parameters
-    if N == 1
-        M = first(SV)
-    else
-        first(SV) == R || throw("Arrays with more than 1 dimension cannot be padded.")
-        M = L
-    end
+    M = univariate_normal_length(S.parameters, N, R, L)
     univariate_normal_quote( M, T, true, nothing, nothing, (track[1], false, false), true, true, true, S)
 end
 @generated function ∂Normal(
@@ -689,13 +453,7 @@ end
     σ::Union{T,Int},
     ::Val{track}
 ) where {S,T,N,R,L,track}
-    SV = S.parameters
-    if N == 1
-        M = first(SV)
-    else
-        first(SV) == R || throw("Arrays with more than 1 dimension cannot be padded.")
-        M = L
-    end
+    M = univariate_normal_length(S.parameters, N, R, L)
     univariate_normal_quote(
         M, T, true, nothing, false,
         (track[1], false, track[2]), true, true, true, S
@@ -707,13 +465,7 @@ end
     σ²::Union{LinearAlgebra.UniformScaling{T},LinearAlgebra.UniformScaling{Int}},
     ::Val{track}
 ) where {S,T,N,R,L,track}
-    SV = S.parameters
-    if N == 1
-        M = first(SV)
-    else
-        first(SV) == R || throw("Arrays with more than 1 dimension cannot be padded.")
-        M = L
-    end
+    M = univariate_normal_length(S.parameters, N, R, L)
     univariate_normal_quote(
         M, T, true, nothing, false,
         (track[1], false, track[2]), true, false, true, S
@@ -726,13 +478,7 @@ end
     σ::Union{T,Int,<:AbstractFixedSizePaddedArray{S,T,N,R,L}},
     ::Val{track}
 ) where {S,T,N,R,L,track}
-    SV = S.parameters
-    if N == 1
-        M = first(SV)
-    else
-        first(SV) == R || throw("Arrays with more than 1 dimension cannot be padded.")
-        M = L
-    end
+    M = univariate_normal_length(S.parameters, N, R, L)
     univariate_normal_quote(
         M, T, true,
         μ <: AbstractFixedSizePaddedVector, σ <: AbstractFixedSizePaddedVector, track, true, true, true, S
@@ -745,29 +491,13 @@ end
     σ::Union{T,Int,<:AbstractFixedSizePaddedArray{S,T,N,R,L}},
     ::Val{track}
 ) where {S,T,N,R,L,track}
-    SV = S.parameters
-    if N == 1
-        M = first(SV)
-    else
-        first(SV) == R || throw("Arrays with more than 1 dimension cannot be padded.")
-        M = L
-    end
+    M = univariate_normal_length(S.parameters, N, R, L)
     univariate_normal_quote(
         M, T, false,
         true, σ <: AbstractFixedSizePaddedVector, track, true, true, true, S
     )
 end
-# @generated function ∂Normal(
-#     sp::StackPointer,
-#     y::T,
-#     μ::Union{T,Int},
-#     σ::AbstractFixedSizePaddedS{S,T,N,R,L},
-#     ::Val{track}
-# ) where {S,N,L,T,track}
-#     M = first(S.parameters)
-#     N > 1 && M != R && throw("Arrays with more than 1 dimension cannot be padded.")
-#     univariate_normal_quote( M, T, false, false, true, track, true, true, true, S)
-# end
+
 
 
 

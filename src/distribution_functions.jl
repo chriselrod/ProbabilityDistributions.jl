@@ -187,7 +187,7 @@ end
             push!(partial_exprs, :(∂αP += y[i] ? ∂logP : ∂logOmP))
         end
         W, Wshift = VectorizationBase.pick_vector_width_shift(T)
-        unroll_factor = max(8 >> Wshift, 1)
+        unroll_factor = max(8 >>> Wshift, 1)
         q = quote
             # $(Expr(:meta, :inline))
             $init_q
@@ -1034,7 +1034,7 @@ function multinomial_quote(M, isvararg::Bool, T)
     q = quote end
     W, Wshift = VectorizationBase.pick_vector_width_shift(M, T)
     Wm1 = W - 1
-    niter = M >> Wshift
+    niter = M >>> Wshift
     nrem = (M + Wm1) & Wm1
     if isvararg
         push!(q.args, :(target = SIMDPirates.vmul(y, SLEEFPirates.log()) ))

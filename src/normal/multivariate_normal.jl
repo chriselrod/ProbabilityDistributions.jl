@@ -4,7 +4,7 @@ using DistributionParameters: AbstractFixedSizeCovarianceMatrix, AbstractCovaria
 function logdet_triangle(A::AbstractMatrix{T}) where {T}
     N = size(A,1)
     W, Wshift = VectorizationBase.pick_vector_width_shift(T)
-    Nrep = N >> Wshift
+    Nrep = N >>> Wshift
 
     vout = SIMDPirates.vbroadcast(Vec{W,T}, zero(T))
     @inbounds for i ∈ 0:Nrep-1
@@ -25,7 +25,7 @@ end
 @inline function vlogdet_triangle(A::AbstractMatrix{T}) where {T}
     N = size(A,1)
     W, Wshift = VectorizationBase.pick_vector_width_shift(T)
-    Nrep = N >> Wshift
+    Nrep = N >>> Wshift
 
     vout = vbroadcast(Vec{W,T}, zero(T))
     @inbounds for i ∈ 0:Nrep-1
@@ -330,7 +330,7 @@ function loadδ_quote(
     W, Wshift = VectorizationBase.pick_vector_width_shift(R, T)
     V = Vec{W,T}
     Wm1 = W - 1
-    Riter = R >> Wshift
+    Riter = R >>> Wshift
     Rrem = R & Wm1
     mask = VectorizationBase.mask_from_remainder(T, Rrem)
     # if K isa Symbol
@@ -549,7 +549,7 @@ function loadδfnmadd_quote(
     W, Wshift = VectorizationBase.pick_vector_width_shift(R, T)
     V = Vec{W,T}
     Wm1 = W - 1
-    Riter = R >> Wshift
+    Riter = R >>> Wshift
     Rrem = R & Wm1
     Riterl = Rrem > 0 ? Riter : Riter - 1
     maskload = maskload & (Rrem > 0)
@@ -817,7 +817,7 @@ function Xβ_load_quote(
     W, Wshift = VectorizationBase.pick_vector_width_shift(R, T)
     V = Vec{W,T}
     Wm1 = W - 1
-    Riter = R >> Wshift
+    Riter = R >>> Wshift
     Rrem = R & Wm1
     Riterl = Rrem > 0 ? Riter : Riter - 1
     maskload = maskload & (Rrem > 0)
@@ -1077,7 +1077,7 @@ function multivariate_normal_SMLT_quote(
                 $row_iter
                 $loop_increments
             end
-            for rrep ∈ 1:Mkrem >> $(VectorizationBase.intlog2(W))
+            for rrep ∈ 1:Mkrem >>> $(VectorizationBase.intlog2(W))
                 ptrUdiag = pointer(invdiag); ptrUtri = ptrUtribase
                 $row_iter_onevec
                 $loop_increments_onevec
@@ -1093,7 +1093,7 @@ function multivariate_normal_SMLT_quote(
     R = Mk2
     while R > 1
         Risodd = isodd(R)
-        Rh = R >> 1
+        Rh = R >>> 1
         for r ∈ 0:(Rh-1)
             dl = Symbol(:δ²_,r)
             dh = Symbol(:δ²_,r+Rh)
@@ -1448,7 +1448,7 @@ end
 function track_mu_store(Mk::Int,Nk,T,μdim,μmy,W,Wshift,μstride,track_Y,μtransposed,initialize::Bool=false)
     size_T = sizeof(T)
     V = Vec{W,T}
-    Riter = Mk >> Wshift
+    Riter = Mk >>> Wshift
     Rrem = Mk & (W-1)
     Riterl = Rrem > 0 ? Riter : Riter-1
     mask = VectorizationBase.mask_from_remainder(T, Rrem)
@@ -1760,7 +1760,7 @@ function ∂mutlivariate_normal_SMLT_rowiter(
             loadB = true, storeA = true, calc_product = track_L ? N : 0
         )
         if col_rem == 0 && !μtransposed && track_μ # then we need to zero-initialize these rows before entering the loop
-            Riter = Mk >> Wshift
+            Riter = Mk >>> Wshift
             Rrem = Mk & (W-1)
             Riterl = Rrem > 0 ? Riter : Riter-1
             for r ∈ 0:Riterl
@@ -2215,7 +2215,7 @@ function ∂multivariate_normal_SMLT_quote(
                 $row_iter
                 $row_increments
             end
-            for rrep ∈ 1:Mkrem >> $(VectorizationBase.intlog2(W))
+            for rrep ∈ 1:Mkrem >>> $(VectorizationBase.intlog2(W))
                 ptrUdiag = pointer(invdiag); ptrUtri = ptrUtribase
                 $row_iter_onevec
                 $row_increments_rem
@@ -2231,7 +2231,7 @@ function ∂multivariate_normal_SMLT_quote(
     R = Mk2
     while R > 1
         Risodd = isodd(R)
-        Rh = R >> 1
+        Rh = R >>> 1
         for r ∈ 0:(Rh-1)
             dl = Symbol(:δ²_,r)
             dh = Symbol(:δ²_,r+Rh)
