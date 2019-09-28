@@ -199,8 +199,8 @@ function univariate_normal_quote(
                     push!(pre_quote.args, :(_sptr += $(VectorizationBase.align(M*sizeof(T)))))
                     push!(return_expr.args, :(∂y'))
                 else
-                    push!(pre_quote.args, :(∂y = MutableFixedSizePaddedArray{$S,$T,$N,$P}(undef) ))
-                    push!(return_expr.args, :(ConstantFixedSizePaddedArray(∂y)'))
+                    push!(pre_quote.args, :(∂y = MutableFixedSizeArray{$S,$T,$N,$P}(undef) ))
+                    push!(return_expr.args, :(ConstantFixedSizeArray(∂y)'))
                 end
             else
                 push!(pre_quote.args, :(∂y = zero($T)))
@@ -217,8 +217,8 @@ function univariate_normal_quote(
                     push!(pre_quote.args, :(_sptr += $(VectorizationBase.align(M*sizeof(T)))))
                     push!(return_expr.args, :(∂μ'))
                 else
-                    push!(pre_quote.args, :(∂μ = MutableFixedSizePaddedArray{$S,$T,$N,$P}(undef) ))
-                    push!(return_expr.args, :(ConstantFixedSizePaddedArray(∂μ)'))
+                    push!(pre_quote.args, :(∂μ = MutableFixedSizeArray{$S,$T,$N,$P}(undef) ))
+                    push!(return_expr.args, :(ConstantFixedSizeArray(∂μ)'))
                 end
             elseif μisvec == false
                 push!(pre_quote.args, :(∂μ = zero($T)))
@@ -234,9 +234,9 @@ function univariate_normal_quote(
                     push!(pre_quote.args, :(_sptr += $(VectorizationBase.align(M*sizeof(T)))))
                     push!(return_expr.args, :(∂σ'))
                 else
-                    push!(pre_quote.args, :(∂σ = MutableFixedSizePaddedArray{$S,$T,$N,$P}(undef) ))
+                    push!(pre_quote.args, :(∂σ = MutableFixedSizeArray{$S,$T,$N,$P}(undef) ))
 #                push!(loop_expr.args, :(∂σ[i] = δσ⁻² * σ⁻¹ ))
-                    push!(return_expr.args, :(ConstantFixedSizePaddedArray(∂σ)'))
+                    push!(return_expr.args, :(ConstantFixedSizeArray(∂σ)'))
                 end
             elseif σisvec == false
                 push!(pre_quote.args, :(∂σ = zero($T)))
@@ -333,127 +333,128 @@ end
     univariate_normal_quote( 1, T, false, false, false, track, true, true)
 end
 
-@noinline function univariate_normal_length(SV::Core.SimpleVector, N, R, L)
+@noinline function univariate_normal_length(SV::Core.SimpleVector, N, RV::Core.SimpleVector, L)
     fsv = first(SV)::Int
+    first(RV)::Int == 1 || throw("Non-unit stride not yet supported.")
     if N == 1
         M = fsv
     else
-        fsv == R || throw("Arrays with more than 1 dimension cannot be padded.")
+        fsv == (RV[2])::Int || throw("Arrays with more than 1 dimension cannot be padded.")
         M = L
     end
     M
 end
 
-@generated function Normal(y::AbstractFixedSizePaddedArray{S,T,N,R,L}, ::Val{track}) where {S,T,N,R,L,track}
-    M = univariate_normal_length(S.parameters, N, R, L)
+@generated function Normal(y::AbstractFixedSizeArray{S,T,N,R,L}, ::Val{track}) where {S,T,N,R,L,track}
+    M = univariate_normal_length(S.parameters, N, R.parameters, L)
     univariate_normal_quote( M, T, true, nothing, nothing, (track[1], false, false), false, true, false )
 end
-@generated function Normal(y::AbstractFixedSizePaddedArray{S,T,N,R,L}, σ::Union{T,Int}, ::Val{track}) where {S,T,N,R,L,track}
-    M = univariate_normal_length(S.parameters, N, R, L)
+@generated function Normal(y::AbstractFixedSizeArray{S,T,N,R,L}, σ::Union{T,Int}, ::Val{track}) where {S,T,N,R,L,track}
+    M = univariate_normal_length(S.parameters, N, R.parameters, L)
     univariate_normal_quote(
         M, T, true, nothing, false,
         (track[1], false, track[2]), false, true, false
     )
 end
 @generated function Normal(
-                y::AbstractFixedSizePaddedArray{S,T,N,R,L},
+                y::AbstractFixedSizeArray{S,T,N,R,L},
                 σ²::Union{LinearAlgebra.UniformScaling{T},LinearAlgebra.UniformScaling{Int}},
                 ::Val{track}
 )::T where {S,T,N,R,L,track}
-    M = univariate_normal_length(S.parameters, N, R, L)
+    M = univariate_normal_length(S.parameters, N, R.parameters, L)
     univariate_normal_quote(
         M, T, true, nothing, false,
         (track[1], false, track[2]), false, false, false
     )
 end
 @generated function Normal(
-    y::AbstractFixedSizePaddedArray{S,T,N,R,L},
-    μ::Union{T,Int,<:AbstractFixedSizePaddedArray{S,T,N,R,L}},
-    σ::Union{T,Int,<:AbstractFixedSizePaddedArray{S,T,N,R,L}},
+    y::AbstractFixedSizeArray{S,T,N,R,L},
+    μ::Union{T,Int,<:AbstractFixedSizeArray{S,T,N,R,L}},
+    σ::Union{T,Int,<:AbstractFixedSizeArray{S,T,N,R,L}},
     ::Val{track}
 ) where {S,T,N,R,L,track}
-    M = univariate_normal_length(S.parameters, N, R, L)
+    M = univariate_normal_length(S.parameters, N, R.parameters, L)
     univariate_normal_quote( M, T, true,
-        μ <: AbstractFixedSizePaddedMatrix, σ <: AbstractFixedSizePaddedMatrix, track, false, true, false
+        μ <: AbstractFixedSizeMatrix, σ <: AbstractFixedSizeMatrix, track, false, true, false
     )
 end
 @generated function Normal(
     y::T,
-    μ::AbstractFixedSizePaddedArray{S,T,N,R,L},
-    σ::Union{T,Int,<:AbstractFixedSizePaddedArray{S,T,N,R,L}},
+    μ::AbstractFixedSizeArray{S,T,N,R,L},
+    σ::Union{T,Int,<:AbstractFixedSizeArray{S,T,N,R,L}},
     ::Val{track}
 ) where {S,T,N,R,L,track}
-    M = univariate_normal_length(S.parameters, N, R, L)
+    M = univariate_normal_length(S.parameters, N, R.parameters, L)
     univariate_normal_quote( M, T, false,
-        true, σ <: AbstractFixedSizePaddedMatrix, track, false, true, false
+        true, σ <: AbstractFixedSizeMatrix, track, false, true, false
     )
 end
 
-@generated function ∂Normal(y::AbstractFixedSizePaddedArray{S,T,N,R,L}, ::Val{track}) where {S,T,N,R,L,track}
+@generated function ∂Normal(y::AbstractFixedSizeArray{S,T,N,R,L}, ::Val{track}) where {S,T,N,R,L,track}
     M = univariate_normal_length(S.parameters, N, R, L)
     univariate_normal_quote( M, T, true, nothing, nothing, (track[1], false, false), true, true, false, S)
 end
 @generated function ∂Normal(
-    y::AbstractFixedSizePaddedArray{S,T,N,R,L}, σ::Union{T,Int}, ::Val{track}
+    y::AbstractFixedSizeArray{S,T,N,R,L}, σ::Union{T,Int}, ::Val{track}
 #) where {M, T <: Real, track}
 ) where {S,T,N,R,L,track}
-    M = univariate_normal_length(S.parameters, N, R, L)
+    M = univariate_normal_length(S.parameters, N, R.parameters, L)
     univariate_normal_quote(
         M, T, true, nothing, false,
         (track[1], false, track[2]), true, true, false, S
     )
 end
 @generated function ∂Normal(
-    y::AbstractFixedSizePaddedArray{S,T,N,R,L},
+    y::AbstractFixedSizeArray{S,T,N,R,L},
     σ²::Union{LinearAlgebra.UniformScaling{T},LinearAlgebra.UniformScaling{Int}}, ::Val{track}
 ) where {S,T,N,R,L,track}
-    M = univariate_normal_length(S.parameters, N, R, L)
+    M = univariate_normal_length(S.parameters, N, R.parameters, L)
     univariate_normal_quote(
         M, T, true, nothing, false,
         (track[1], false, track[2]), true, false, false, S
     )
 end
 @generated function ∂Normal(
-    y::AbstractFixedSizePaddedArray{S,T,N,R,L},
-    μ::Union{T,Int,<:AbstractFixedSizePaddedArray{S,T,N,R,L}},
-    σ::Union{T,Int,<:AbstractFixedSizePaddedArray{S,T,N,R,L}},
+    y::AbstractFixedSizeArray{S,T,N,R,L},
+    μ::Union{T,Int,<:AbstractFixedSizeArray{S,T,N,R,L}},
+    σ::Union{T,Int,<:AbstractFixedSizeArray{S,T,N,R,L}},
     ::Val{track}
 ) where {S,T,N,R,L,track}
-    M = univariate_normal_length(S.parameters, N, R, L)
+    M = univariate_normal_length(S.parameters, N, R.parameters, L)
     univariate_normal_quote(
         M, T, true,
-        μ <: AbstractFixedSizePaddedMatrix, σ <: AbstractFixedSizePaddedMatrix, track, true, true, false, S
+        μ <: AbstractFixedSizeMatrix, σ <: AbstractFixedSizeMatrix, track, true, true, false, S
     )
 end
 @generated function ∂Normal(
     y::T,
-    μ::AbstractFixedSizePaddedArray{S,T,N,R,L},
-    σ::Union{T,Int,<:AbstractFixedSizePaddedArray{S,T,N,R,L}},
+    μ::AbstractFixedSizeArray{S,T,N,R,L},
+    σ::Union{T,Int,<:AbstractFixedSizeArray{S,T,N,R,L}},
     ::Val{track}
 ) where {S,T,N,R,L,track}
-    M = univariate_normal_length(S.parameters, N, R, L)
+    M = univariate_normal_length(S.parameters, N, R.parameters, L)
     univariate_normal_quote(
         M, T, false,
-        true, σ <: AbstractFixedSizePaddedMatrix, track, true, true, false, S
+        true, σ <: AbstractFixedSizeMatrix, track, true, true, false, S
     )
 end
 
 
 @generated function ∂Normal(
     sp::StackPointer,
-    y::AbstractFixedSizePaddedArray{S,T,N,R,L},
+    y::AbstractFixedSizeArray{S,T,N,R,L},
     ::Val{track}
 ) where {S,T,N,R,L,track}
-    M = univariate_normal_length(S.parameters, N, R, L)
+    M = univariate_normal_length(S.parameters, N, R.parameters, L)
     univariate_normal_quote( M, T, true, nothing, nothing, (track[1], false, false), true, true, true, S)
 end
 @generated function ∂Normal(
     sp::StackPointer,
-    y::AbstractFixedSizePaddedArray{S,T,N,R,L},
+    y::AbstractFixedSizeArray{S,T,N,R,L},
     σ::Union{T,Int},
     ::Val{track}
 ) where {S,T,N,R,L,track}
-    M = univariate_normal_length(S.parameters, N, R, L)
+    M = univariate_normal_length(S.parameters, N, R.parameters, L)
     univariate_normal_quote(
         M, T, true, nothing, false,
         (track[1], false, track[2]), true, true, true, S
@@ -461,11 +462,11 @@ end
 end
 @generated function ∂Normal(
     sp::StackPointer,
-    y::AbstractFixedSizePaddedArray{S,T,N,R,L},
+    y::AbstractFixedSizeArray{S,T,N,R,L},
     σ²::Union{LinearAlgebra.UniformScaling{T},LinearAlgebra.UniformScaling{Int}},
     ::Val{track}
 ) where {S,T,N,R,L,track}
-    M = univariate_normal_length(S.parameters, N, R, L)
+    M = univariate_normal_length(S.parameters, N, R.parameters, L)
     univariate_normal_quote(
         M, T, true, nothing, false,
         (track[1], false, track[2]), true, false, true, S
@@ -473,28 +474,28 @@ end
 end
 @generated function ∂Normal(
     sp::StackPointer,
-    y::AbstractFixedSizePaddedArray{S,T,N,R,L},
-    μ::Union{T,Int,<:AbstractFixedSizePaddedArray{S,T,N,R,L}},
-    σ::Union{T,Int,<:AbstractFixedSizePaddedArray{S,T,N,R,L}},
+    y::AbstractFixedSizeArray{S,T,N,R,L},
+    μ::Union{T,Int,<:AbstractFixedSizeArray{S,T,N,R,L}},
+    σ::Union{T,Int,<:AbstractFixedSizeArray{S,T,N,R,L}},
     ::Val{track}
 ) where {S,T,N,R,L,track}
-    M = univariate_normal_length(S.parameters, N, R, L)
+    M = univariate_normal_length(S.parameters, N, R.parameters, L)
     univariate_normal_quote(
         M, T, true,
-        μ <: AbstractFixedSizePaddedVector, σ <: AbstractFixedSizePaddedVector, track, true, true, true, S
+        μ <: AbstractFixedSizeVector, σ <: AbstractFixedSizeVector, track, true, true, true, S
     )
 end
 @generated function ∂Normal(
     sp::StackPointer,
     y::T,
-    μ::AbstractFixedSizePaddedArray{S,T,N,R,L},
-    σ::Union{T,Int,<:AbstractFixedSizePaddedArray{S,T,N,R,L}},
+    μ::AbstractFixedSizeArray{S,T,N,R,L},
+    σ::Union{T,Int,<:AbstractFixedSizeArray{S,T,N,R,L}},
     ::Val{track}
 ) where {S,T,N,R,L,track}
-    M = univariate_normal_length(S.parameters, N, R, L)
+    M = univariate_normal_length(S.parameters, N, R.parameters, L)
     univariate_normal_quote(
         M, T, false,
-        true, σ <: AbstractFixedSizePaddedVector, track, true, true, true, S
+        true, σ <: AbstractFixedSizeVector, track, true, true, true, S
     )
 end
 

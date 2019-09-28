@@ -95,7 +95,7 @@ end
     A = randn(M, 2M);
     BLAS.syrk!('L', 'N', 1.0, A, 0.0, Σ);
 
-    L = MutableFixedSizePaddedMatrix{M,M,Float64,M}(undef);
+    L = MutableFixedSizeMatrix{M,M,Float64,M}(undef);
     copyto!(L, Σ);
     LAPACK.potrf!('L', L);
 

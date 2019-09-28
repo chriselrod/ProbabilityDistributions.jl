@@ -38,7 +38,7 @@ function multivariate_normal_lkj_quote(M, L, T, (track_y, track_μ, track_Σ), p
             push!(q.args, :(∂Rδ_∂R = Rδ * δ'))
             push!(q.args, :(∂Rδ_∂R = ∂Rδ_∂R + ∂Rδ_∂R))
             push!(q.args, quote
-                ∂out∂R = MutableFixedSizePaddedVector{$L,$T}(undef)
+                ∂out∂R = MutableFixedSizeVector{$L,$T}(undef)
                 @vectorize $T for m ∈ 1:$M
                     ∂out∂R[m] = 1/dR[m] - 0.5 * ∂Rδ_∂R[m]
                 end
@@ -78,12 +78,12 @@ function multivariate_normal_lkj_quote(M, L, T, (track_y, track_μ, track_Σ), p
         end
     end
 end
-@generated function Normal(y::AbstractFixedSizePaddedVector{M,T},
+@generated function Normal(y::AbstractFixedSizeVector{M,T},
                                     μ, L::StructuredMatrices.AbstractLowerTriangularMatrix{M,T,LL},
                                     ::Val{track}) where {M, T <: Real, LL, track}
     multivariate_normal_lkj_quote(M, LL, T, track, false, false)
 end
-@generated function Normal(y::AbstractFixedSizePaddedVector{M,T},
+@generated function Normal(y::AbstractFixedSizeVector{M,T},
                                     μ, R::StructuredMatrices.AbstractUpperTriangularMatrix{M,T,LL},
                                     ::Val{track}) where {M, T <: Real, LL, track}
 
@@ -132,12 +132,12 @@ end
 end
 
 
-@generated function ∂Normal(y::AbstractFixedSizePaddedVector{M,T},
+@generated function ∂Normal(y::AbstractFixedSizeVector{M,T},
                                     μ, L::StructuredMatrices.AbstractLowerTriangularMatrix{M,T,LL},
                                     ::Val{track}) where {M, T <: Real, LL, track}
     multivariate_normal_lkj_quote(M, LL, T, track, true, false)
 end
-@generated function ∂Normal(y::AbstractFixedSizePaddedVector{M,T},
+@generated function ∂Normal(y::AbstractFixedSizeVector{M,T},
                                     μ, R::StructuredMatrices.AbstractUpperTriangularMatrix{M,T,LL},
                                     ::Val{track}) where {M, T <: Real, LL, track}
 
@@ -153,8 +153,8 @@ function matrix_normal_ar_lkj_quote(M, N, T, (track_y, track_μ, track_Λ, track
         Λᵥ = StructuredMatrices.cache(Λ)
         Ny = length(Y)
         qf = vbroadcast(Vec{$W,$T}, zero($T))
-        δ = MutableFixedSizePaddedMatrix{$M,$N,$V}(undef)
-        δU = MutableFixedSizePaddedMatrix{$M,$N,$V}(undef)
+        δ = MutableFixedSizeMatrix{$M,$N,$V}(undef)
+        δU = MutableFixedSizeMatrix{$M,$N,$V}(undef)
         Yᵥ = vectorizable(Y)
         i = 0
     end
@@ -168,11 +168,11 @@ function matrix_normal_ar_lkj_quote(M, N, T, (track_y, track_μ, track_Λ, track
     if partial
         # First, we look at initializations
         if track_μ
-            push!(initialize_block.args, :(∂qf∂δ = zero(PaddedMatrices.MutableFixedSizePaddedMatrix{$M,$N,Vec{$W,$T}}) ))
+            push!(initialize_block.args, :(∂qf∂δ = zero(PaddedMatrices.MutableFixedSizeMatrix{$M,$N,Vec{$W,$T}}) ))
             push!(return_expr.args, :( vsum(∂qf∂δ) ) )
         end
         if ( track_μ || track_L )
-            push!(initialize_block.args, :(Λᵥ′ΛᵥδU = PaddedMatrices.MutableFixedSizePaddedMatrix{$M,$N,Vec{$W,$T}}(undef) ))
+            push!(initialize_block.args, :(Λᵥ′ΛᵥδU = PaddedMatrices.MutableFixedSizeMatrix{$M,$N,Vec{$W,$T}}(undef) ))
         end
         if track_Λ
             push!(initialize_block.args, :(∂qf∂Λ = vbroadcast(Vec{$W,$T}, zero($T))))
@@ -254,16 +254,16 @@ function matrix_normal_ar_lkj_quote(M, N, T, (track_y, track_μ, track_Λ, track
 end
 
 @generated function Normal(
-            Y::AbstractScatteredArray{T,2,<: Union{SMatrix{M,N,T},AbstractFixedSizePaddedMatrix{M,N,T}},1,2},
-            μ::Union{<:SMatrix{M,N,T},<:AbstractFixedSizePaddedMatrix{M,N,T}},
+            Y::AbstractScatteredArray{T,2,<: Union{SMatrix{M,N,T},AbstractFixedSizeMatrix{M,N,T}},1,2},
+            μ::Union{<:SMatrix{M,N,T},<:AbstractFixedSizeMatrix{M,N,T}},
             Λ::AbstractAutoregressiveMatrix{T,V},
             L::LKJCorrCholesky{N,T}, ::Val{track}
         ) where {M,N,T,V,track}
     matrix_normal_ar_lkj_quote(M,N,T,track,false)
 end
 @generated function ∂Normal(
-            Y::AbstractScatteredArray{T,2,<: Union{SMatrix{M,N,T},AbstractFixedSizePaddedMatrix{M,N,T}},1,2},
-            μ::Union{<:SMatrix{M,N,T},<:AbstractFixedSizePaddedMatrix{M,N,T}},
+            Y::AbstractScatteredArray{T,2,<: Union{SMatrix{M,N,T},AbstractFixedSizeMatrix{M,N,T}},1,2},
+            μ::Union{<:SMatrix{M,N,T},<:AbstractFixedSizeMatrix{M,N,T}},
             Λ::AbstractAutoregressiveMatrix{T,V},
             L::LKJCorrCholesky{N,T}, ::Val{track}
         ) where {M,N,T,V,track}
@@ -275,17 +275,17 @@ function matrix_normal_ar_lkjinv_quote(M, N, T, (track_y, track_μ, track_Λ, tr
     WT = VectorizationBase.REGISTER_SIZE
     @assert track_y == false
 
-    δ = MutableFixedSizePaddedMatrix{M,N,V,M,(M*N)}(undef)
-    δU = MutableFixedSizePaddedMatrix{M,N,V,M,(M*N)}(undef)
+    δ = MutableFixedSizeMatrix{M,N,V,M,(M*N)}(undef)
+    δU = MutableFixedSizeMatrix{M,N,V,M,(M*N)}(undef)
     # buffer_size = 2M*N*WT
     initialize_block = quote
         Λᵥ = StructuredMatrices.cache(Λ)
         Ny = length(Y)
         qf = vbroadcast(Vec{$W,$T}, zero($T))
         Yᵥ = vectorizable(Y)
-        # δ  = MutableFixedSizePaddedMatrix{$M,$N,$V,$M,$(M*N)}(undef)
+        # δ  = MutableFixedSizeMatrix{$M,$N,$V,$M,$(M*N)}(undef)
         δ = $δ
-        # δU = MutableFixedSizePaddedMatrix{$M,$N,$V,$M,$(M*N)}(undef)
+        # δU = MutableFixedSizeMatrix{$M,$N,$V,$M,$(M*N)}(undef)
         δU = $δU
         i = 0
     end
@@ -307,8 +307,8 @@ function matrix_normal_ar_lkjinv_quote(M, N, T, (track_y, track_μ, track_Λ, tr
     if partial
         # First, we look at initializations
         if track_μ
-            # push!(initialize_block.args, :(∂qf∂δ = zero(PaddedMatrices.MutableFixedSizePaddedMatrix{$M,$N,Vec{$W,$T}}) ))
-            ∂qf∂δ = PaddedMatrices.MutableFixedSizePaddedMatrix{M,N,Vec{W,T}}(undef)
+            # push!(initialize_block.args, :(∂qf∂δ = zero(PaddedMatrices.MutableFixedSizeMatrix{$M,$N,Vec{$W,$T}}) ))
+            ∂qf∂δ = PaddedMatrices.MutableFixedSizeMatrix{M,N,Vec{W,T}}(undef)
             push!(initialize_block.args, quote
                 ∂qf∂δ = $∂qf∂δ
                 PaddedMatrices.zero!(∂qf∂δ)
@@ -316,8 +316,8 @@ function matrix_normal_ar_lkjinv_quote(M, N, T, (track_y, track_μ, track_Λ, tr
             push!(return_expr.args, :( vsum(∂qf∂δ) ) )
         end
         if ( track_μ || track_U )
-            # push!(initialize_block.args, :(Λᵥ′ΛᵥδU = PaddedMatrices.MutableFixedSizePaddedMatrix{$M,$N,Vec{$W,$T}}(undef) ))
-            Λᵥ′ΛᵥδU = PaddedMatrices.MutableFixedSizePaddedMatrix{M,N,Vec{W,T}}(undef)
+            # push!(initialize_block.args, :(Λᵥ′ΛᵥδU = PaddedMatrices.MutableFixedSizeMatrix{$M,$N,Vec{$W,$T}}(undef) ))
+            Λᵥ′ΛᵥδU = PaddedMatrices.MutableFixedSizeMatrix{M,N,Vec{W,T}}(undef)
             push!(initialize_block.args, :(Λᵥ′ΛᵥδU = $Λᵥ′ΛᵥδU ))
         end
         if track_Λ
@@ -429,8 +429,8 @@ function matrix_normal_ar_lkjinv_quote(M, N, T, (track_y, track_μ, track_Λ, tr
     end
 end
 @generated function Normal(
-            Y::AbstractScatteredArray{T,2,<: Union{SMatrix{M,N,T},AbstractFixedSizePaddedMatrix{M,N,T}},1},
-            μ::Union{<:SMatrix{M,N,T},<:AbstractFixedSizePaddedMatrix{M,N,T}},
+            Y::AbstractScatteredArray{T,2,<: Union{SMatrix{M,N,T},AbstractFixedSizeMatrix{M,N,T}},1},
+            μ::Union{<:SMatrix{M,N,T},<:AbstractFixedSizeMatrix{M,N,T}},
             Λ::AbstractAutoregressiveMatrix{T,V},
             U::StructuredMatrices.AbstractUpperTriangularMatrix{N,T}, ::Val{track}
         # ) where {M,N,V,T,track}
@@ -438,8 +438,8 @@ end
     matrix_normal_ar_lkjinv_quote(M,N,T,track,false)
 end
 @generated function ∂Normal(
-            Y::AbstractScatteredArray{T,2,<: Union{SMatrix{M,N,T},AbstractFixedSizePaddedMatrix{M,N,T}},1},
-            μ::Union{<:SMatrix{M,N,T},<:AbstractFixedSizePaddedMatrix{M,N,T}},
+            Y::AbstractScatteredArray{T,2,<: Union{SMatrix{M,N,T},AbstractFixedSizeMatrix{M,N,T}},1},
+            μ::Union{<:SMatrix{M,N,T},<:AbstractFixedSizeMatrix{M,N,T}},
             Λ::AbstractAutoregressiveMatrix{T,V},
             U::StructuredMatrices.AbstractUpperTriangularMatrix{N,T}, ::Val{track}
         # ) where {M,N,V,T,track}
