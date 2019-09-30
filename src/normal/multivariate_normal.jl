@@ -54,6 +54,17 @@ end
     end
 end
 
+function info_trtrs!(uplo::AbstractChar, trans::AbstractChar, diag::AbstractChar, A::AbstractMatrix{Float64}, B::AbstractVecOrMat{Float64})
+    n = size(B,1)
+    info = Ref{LinearAlgebra.BlasInt}()
+    ccall(
+        (BLAS.@blasfunc(dtrtrs_), LAPACK.liblapack), Cvoid,
+        (Ref{UInt8}, Ref{UInt8}, Ref{UInt8}, Ref{LinearAlgebra.BlasInt}, Ref{LinearAlgebra.BlasInt},
+        Ptr{Float64}, Ref{LinearAlgebra.BlasInt}, Ptr{Float64}, Ref{LinearAlgebra.BlasInt}, Ptr{LinearAlgebra.BlasInt}),
+        uplo, trans, diag, n, size(B,2), A, max(1,stride(A,2)),
+        B, max(1,stride(B,2)), info)
+    info[]
+end
 
 @generated function Normal!(
     δ::AbstractMatrix{T},
@@ -82,8 +93,11 @@ end
             coffset += ncol
         end
         L = Σ#.data
-        LinearAlgebra.LAPACK.potrf!('L', L)
-        LinearAlgebra.LAPACK.trtrs!('L', 'N', 'N', L, δ)
+        info = last(LinearAlgebra.LAPACK.potrf!('L', L))
+        info == 0 || return $T(-Inf)
+        # LinearAlgebra.LAPACK.trtrs!('L', 'N', 'N', L, δ)
+        info = info_trtrs!('L', 'N', 'N', L, δ)
+        info == 0 || return $T(-Inf)
         
         starget = vbroadcast(SVec{$(VectorizationBase.pick_vector_width(T)),T}, zero($T))
         @vvectorize for i ∈ 1:length(δ)
@@ -276,19 +290,19 @@ end
     if track_Y
         # We are tracking Y, so we cannot drop Σ⁻¹δ, because this will be returned as ∂Yₖ
         push!(q.args, :(Σ⁻¹δ = DynamicPtrMatrix(stack_pointer, ($R,cols), $R)))
-        push!(q.args, :(stack_pointer += $(sizeof(T)*R)*cols))
+        push!(q.args, :(stack_pointer += $(VectorizationBase.align(sizeof(T)*R)*cols)))
         push!(q.args, :(δ = DynamicPtrMatrix(stack_pointer, ($R, cols), $R)))
     else
         # because we are not tracking Y, we can drop Σ⁻¹δ, which will contain ∂Y
         # we therefore allocate it on top of δ on the stack.
         push!(q.args, :(δ = DynamicPtrMatrix(stack_pointer, ($R, cols), $R)))
-        push!(q.args, :(stack_pointer += $(sizeof(T)*R)*cols))
+        push!(q.args, :(stack_pointer += $(VectorizationBase.align(sizeof(T)*R))*cols))
         push!(q.args, :(Σ⁻¹δ = DynamicPtrMatrix(stack_pointer, ($R,cols), $R)))
     end
     if track_μ && track_Y
-        push!(q.args, :(sp = PaddedMatrices.StackPointer(Base.unsafe_convert(Ptr{Cvoid}, stack_pointer + $(K*sizeof(T)*R)) )))
+        push!(q.args, :(sp = PaddedMatrices.StackPointer(Base.unsafe_convert(Ptr{Cvoid}, stack_pointer + $(VectorizationBase.align(K*sizeof(T)*R)) ))))
     elseif track_μ
-        push!(q.args, :(sp = sp + $(K*sizeof(T)*R) ))
+        push!(q.args, :(sp = sp + $(VectorizationBase.align(K*sizeof(T)*R) )))
     elseif track_Y
         push!(q.args, :(sp = PaddedMatrices.StackPointer(Base.unsafe_convert(Ptr{Cvoid}, stack_pointer) )))
     end
