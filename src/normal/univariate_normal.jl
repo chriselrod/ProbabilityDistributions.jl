@@ -5,7 +5,18 @@ function univariate_normal_quote(
     (track_y, track_μ, track_σ)::NTuple{3,Bool},
     partial::Bool, stddev::Bool, sp::Bool = false, S = Tuple{M}
 )
-    P = first(S.parameters); N = length(S.parameters)
+    N = length(S.parameters)
+    if partial
+        X = Vector{Int}(undef, N)
+        X[1] = 1
+        if N > 1
+            X[2] = P
+        end
+        for n in 3:N
+            X[n] = X[n-1] * (S.parameters[n])::Int
+        end
+        P = Tuple{X...}
+    end
  #   return_scalar = true
     return_scalar = false
     # q = quote end
@@ -280,7 +291,7 @@ function univariate_normal_quote(
 end
 
 @generated function Normal(y::T, ::Val{track}) where {track,T <: Real}
-    univariate_normal_quote(1, T, false, nothing, nothing, (track[1], false, false), false, true)
+    univariate_normal_quote(1, T, false, nothing, nothing, (track[1], false, false), false, true, false)
 end
 
 @generated function Normal(y::T, σ::Union{T,Int}, ::Val{track}) where {T <: Real, track}
