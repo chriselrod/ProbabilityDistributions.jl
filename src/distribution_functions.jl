@@ -1111,51 +1111,146 @@ push!(DISTRIBUTION_DIFF_RULES, :lsgg)
 
 
 
-
-normal_lpdf(y, μ, τ, logrootτ) = -0.5τ * abs2(y-μ) + logrootτ
+emax(a, em, ed50) = em * a / (a + ed50)
+normal_lpdf(y, μ, nhτ, nlogrootτ) = nhτ * abs2(y-μ) - nlogrootτ
 @generated function EₘₐₓNMA(
     α::AbstractVector{T}, Eₘₐₓ::AbstractVector{T}, ED₅₀::AbstractVector{T}, σ::T,
-    Treatments::StructuredMatrices.RaggedMatrix{Int,Int,Vector{Int},Vector{Int}}, Doses::AbstractVector{T},
+    Treatments::StructuredMatrices.FixedSizeRaggedMatrix{M,N,P,<:Integer,<:Integer}, Doses::AbstractVector{T},
     ::Val{track}() = Val{(true,true,true,true,false,false)}
-) where {T, track}
+) where {T, track, M, N, P}
     track_α, track_Eₘₐₓ, track_ED₅₀, track_σ, track_treat, track_dose = track
     @assert track_treat == false && track_dose == false
+    padM = PaddedMatrices.calc_padding(M-1)
+    W, Wshift = VectorizationBase.pick_vector_width_shift(M-1)
 
-    target = zero(T)
-    τ = 1 / abs2(σ)
-    j = 1
-    col_lengths = treatment.column_lengths
-    for i in eachindex(col_lengths)
-        t = treatment[j]
-        emi1 = emax(dose[j], emaxv[t], ed50v[t]) - αv[j]
-        # αi1 = αv[j]
-        s = zero(T)
-        j += 1
-        for k in 2:col_lengths[i]
-            t = treatment[j]
-            emik = emax(dose[j], emaxv[t], ed50v[t])
-            δik = αv[j] - emik + emi1 # - αi1
-            target += normal_lpdf(δik, s/(k-1), τ * (2*(k-1)) / k )
-            s += δik
+    quote
+        target = zero(T)
+        τ = 1 / (σ*σ)
+        j = 1
+        col_lengths = Treatments.column_lengths
+        vτ = SIMDPirates.vbroadcast(Vec{$W,$T}, τ)
+        vnh = SIMDPirates.vbroadcast(Vec{$W,$T}, $(T(-0.5)))
+        $([:($(Symbol(:vτma_,k)) = vmul(vτ, $(Expr(:tuple, [Core.VecElement{T}(2m/(m+1)) for m in k*W+1:k*W+padM]...)))) for k in 0:((padM>>>Wshift)-1)]...)
+        $([:($(Symbol(:vnhτ_,k)) = vmul(vnh, $(Symbol(:vτma_,k)))) for k in 0:((padM>>>Wshift)-1)]...)
+        $([:($(Symbol(:vnlogrootτ_,k)) = vmul(vnh, $(Symbol(:vτma_,k)))) for k in 0:((padM>>>Wshift)-1)]...)
+        @inbounds nhτ = $(Expr(:tuple, [:(($(Symbol(:vnhτ_,m>>>Wshift))[$(1+m&(W-1))]).value) for m in 0:padM-1]...))
+        @inbounds nlogrootτ = $(Expr(:tuple, [:(($(Symbol(:vnlogrootτ_,m>>>Wshift))[$(1+m&(W-1))]).value) for m in 0:padM-1]...))
+        for i in eachindex(col_lengths)
+            t = Treatments[j]
+            emi1 = emax(dose[j], emaxv[t], ed50v[t]) - αv[j]
+            s = zero(T)
             j += 1
+            for k in 1:col_lengths[i]-1
+                t = Treatments[j]
+                emik = emax(dose[j], emaxv[t], ed50v[t])
+                δik = αv[j] - emik + emi1 # - αi1
+                # target += normal_lpdf(δik, s/(k-1), τ * (2*(k-1)) / k )
+                target += normal_lpdf(δik, s/k, nhτ[k], nlogrootτ[k])
+                s += δik
+                j += 1
+            end
         end
+        target
     end
-    target
-
 end
-function dnormal_lpdf(y, μ, τ, logrootτ, σ²)
+@inline function ∂emax(a, em, ed50)
+    #    f(a,b,c) =  a*c   / (b + c)
+    # ∂f∂a(a,b,c) =    c   / (b + c)
+    # ∂f∂b(a,b,c) = -a*c   / (b + c)^2
+    # ∂f∂c(a,b,c) =  a * b / (b + c)^2
+    @fastmath begin
+        invaped50 = 1 / ( a + ed50 )
+        eminvaped50 = em * invaped50
+        f = a * eminvaped50
+        dfda = ed50 * eminvaped50 * invaped50
+        dfdemax = a * invaped50
+        dfded50 = - f * invaped50
+    end
+    f, dfda, dfdemax, dfded50
+end
+function ∂normal_lpdf(y, μ, nhτ, nlogrootτ, nhσ²)
     @fastmath begin
         z = y - μ
-        f = -0.5τ * abs2(z) + logrootτ
-        ∂f∂y = -τ * z
-        ∂f∂μ = τ * z
-        ∂f∂τ = -0.5abs2(z) + 0.5σ²
+        nτ = nhτ + nhτ
+        z² = z * z
+        f = nhτ * z² - logrootτ
+        ∂f∂y = nτ * z
+        ∂f∂μ = -∂f∂y
+        ∂f∂τ =  - 0.5 * z² - nhσ²
     end
     f, ∂f∂y, ∂f∂μ, ∂f∂τ
 end
 
 @generated function ∂EₘₐₓNMA()
+    target = 0.0
+    @inbounds for i in eachindex(demaxv)#, ded50v)
+        ded50v[i] = 0.0
+        demaxv[i] = 0.0
+    end
+    invσ = 1/σ
+    # σ² =  σ * σ
+    τ = abs2(invσ)
+    dτdσ = -2τ*invσ
+    # tau, dtaudsigma = 1/abs2(sigma), -2/sigma^3
+    j = 1
+    dτ = zero(σ)
+    col_lengths = treatment.column_lengths
+    
+    vτ = SIMDPirates.vbroadcast(Vec{$W,$T}, τ)
+    vnh = SIMDPirates.vbroadcast(Vec{$W,$T}, $(T(-0.5)))
+    $([:($(Symbol(:vτma_,k)) = vmul(vτ, $(Expr(:tuple, [Core.VecElement{T}(2m/(m+1)) for m in k*W+1:k*W+padM]...)))) for k in 0:((padM>>>Wshift)-1)]...)
+    $([:($(Symbol(:vnhτ_,k)) = vmul(vnh, $(Symbol(:vτma_,k)))) for k in 0:((padM>>>Wshift)-1)]...)
+    $([:($(Symbol(:vnhσ²_,k)) = SIMDPirates.vinv($(Symbol(:vnhτ_,k)))) for k in 0:((padM>>>Wshift)-1)]...)
+    $([:($(Symbol(:vnlogrootτ_,k)) = vmul(vnh, $(Symbol(:vτma_,k)))) for k in 0:((padM>>>Wshift)-1)]...)
+    @inbounds nhτ = $(Expr(:tuple, [:(($(Symbol(:vnhτ_,m>>>Wshift))[$(1+m&(W-1))]).value) for m in 0:padM-1]...))
+    @inbounds nlogrootτ = $(Expr(:tuple, [:(($(Symbol(:vnlogrootτ_,m>>>Wshift))[$(1+m&(W-1))]).value) for m in 0:padM-1]...))
+    @inbounds nhσ² = $(Expr(:tuple, [:(($(Symbol(:vnhσ²_,m>>>Wshift))[$(1+m&(W-1))]).value) for m in 0:padM-1]...))
 
+    logτs = ntuple(Val(7)) do k log(τ*2k/(k+1)) end
+    @fastmath @inbounds for i in eachindex(col_lengths)
+        ti = treatment[j]
+        ji = j
+        emi1, demi1ddose, demi1demaxv, demi1ded50v = demax(dose[j], emaxv[ti], ed50v[ti])
+        αi1 = αv[ji]
+        emi1minusαi1 = emi1 - αi1
+        dtargetdαi = 0.0
+        dtargetdemaxv = 0.0
+        dtargetded50v = 0.0
+        s = 0.0
+        j += 1
+        # fill!(dsdemax, 0.0)
+        for k in 1:col_lengths[i]-1
+            t = treatment[j]
+            emik, demikddose, demikdemaxv, demikded50v = demax(dose[j], emaxv[t], ed50v[t])
+            δik = αv[j] - emik + emi1minusαi1
+            τscale = (2*k) / (k+1)
+            sscale = 1 / k
+            # f, dfdy, dfdμ, dfdτ = dnormal_lpdf( δik, s*sscale, τ * τscale, logτs[k-1] )
+            f, dfdy, dfdμ, dfdτ = dnormal_lpdf( δik, s*sscale, ntτ[k], nlogrootτ[k], nhσ²[k] )
+            target += f
+            dτ += dfdτ * τscale
+            dtargetdαi -= dfdy * sscale
+            dtargetdemaxv += dfdy*demi1demaxv*sscale
+            dtargetded50v += dfdy*demi1ded50v*sscale
+            for p in 1:k-1
+                tp = treatment[j + p - k]
+                dαv[j + p - k] += dfdμ*sscale
+                demaxv[tp] -= dsdemax[1,p]*dfdμ*sscale
+                ded50v[tp] -= dsdemax[2,p]*dfdμ*sscale
+            end
+            dαv[j] = dfdy
+            demaxv[t] -= dfdy*demikdemaxv
+            ded50v[t] -= dfdy*demikded50v
+            dsdemax[1,k] = demikdemaxv
+            dsdemax[2,k] = demikded50v
+            s += δik
+            j += 1
+        end
+        dαv[ji] = dtargetdαi
+        demaxv[ti] += dtargetdemaxv
+        ded50v[ti] += dtargetded50v
+    end
+    target, dαv, demaxv, ded50v, dτ*dτdσ
 end
 
 
