@@ -86,6 +86,71 @@ push!(FMADD_DISTRIBUTIONS, :Bernoulli_logit)
 #
 # end
 
+function Bernoulli_logit_quote(T)
+    W = VectorizationBase.pick_vector_width(T)
+    q = quote
+        # $(Expr(:meta, :inline))
+        target = vbroadcast(Vec{$W,$T}, zero($T))
+        @vvectorize $T for i ∈ eachindex(y)
+            αᵢ = α[i]
+            invOmP = one($T) + SLEEFPirates.exp( αᵢ )
+            nlogOmP = log(invOmP)
+            nlogP = nlogOmP - αᵢ
+            target = vsub(target, y[i] ? nlogP : nlogOmP)
+        end
+        target
+    end
+    simplify_expr(q)
+end
+
+@generated function Bernoulli_logit(
+    y::BitVector, α::AbstractVector{T},
+    ::Val{track} = Val{(false,true)}()
+) where {T, track}
+    y_is_param, α_is_param = track
+    @assert y_is_param == false
+    Bernoulli_logit_quote(T)
+end
+function ∂Bernoulli_logit_quote(T)
+    W = VectorizationBase.pick_vector_width(T)
+    q = quote
+        # $(Expr(:meta, :inline))
+        target = vbroadcast(Vec{$W,$T}, zero($T))
+        @vvectorize $T for i ∈ eachindex(y)
+            αᵢ = α[i]
+            invOmP = (one($T) + SLEEFPirates.exp( αᵢ ))
+            ∂logP = one($T) / invOmP
+            nlogOmP = SLEEFPirates.log(invOmP)
+            nlogP = nlogOmP - αᵢ
+            target = vsub(target, y[i] ? nlogP : nlogOmP)
+            ∂α[i] = y[i] ? ∂logP : ∂logP - one($T)
+        end
+        target
+    end
+    simplify_expr(q)
+end
+
+@generated function ∂Bernoulli_logit!(
+    ∂α::AbstractVector{T}, y::BitVector, α::AbstractVector{T}
+) where {T}
+    # y_is_param, α_is_param = track
+    # @assert y_is_param == false
+    # α_is_param ? ∂Bernoulli_logit_quote(T) : Bernoulli_logit_quote(T)
+    ∂Bernoulli_logit_quote(T)
+end
+
+function ∂Bernoulli_logit(y::BitVector, α::AbstractVector{T}, ::Val{track} = Val{(false,true)}()) where {T,track}
+    y_is_param, α_is_param = track
+    @assert y_is_param == false
+    if α_is_param
+        ∂α = similar(α)
+        return Bernoulli_logit!(∂α, y, α), ∂α
+    else
+        return Bernoulli_logit(y, α)
+    end
+end
+push!(DISTRIBUTION_DIFF_RULES, :Bernoulli_logit)
+
 
 @generated function Bernoulli_logit_fmadd(y::BitVector, X::AbstractMatrix{T}, β::AbstractVector{T}, α::AbstractFloat,
                             ::Val{track} = Val{(false,false,true,true)}()) where {T, track}
@@ -1043,6 +1108,58 @@ end
     )
 end
 push!(DISTRIBUTION_DIFF_RULES, :lsgg)
+
+
+
+
+normal_lpdf(y, μ, τ, logrootτ) = -0.5τ * abs2(y-μ) + logrootτ
+@generated function EₘₐₓNMA(
+    α::AbstractVector{T}, Eₘₐₓ::AbstractVector{T}, ED₅₀::AbstractVector{T}, σ::T,
+    Treatments::StructuredMatrices.RaggedMatrix{Int,Int,Vector{Int},Vector{Int}}, Doses::AbstractVector{T},
+    ::Val{track}() = Val{(true,true,true,true,false,false)}
+) where {T, track}
+    track_α, track_Eₘₐₓ, track_ED₅₀, track_σ, track_treat, track_dose = track
+    @assert track_treat == false && track_dose == false
+
+    target = zero(T)
+    τ = 1 / abs2(σ)
+    j = 1
+    col_lengths = treatment.column_lengths
+    for i in eachindex(col_lengths)
+        t = treatment[j]
+        emi1 = emax(dose[j], emaxv[t], ed50v[t]) - αv[j]
+        # αi1 = αv[j]
+        s = zero(T)
+        j += 1
+        for k in 2:col_lengths[i]
+            t = treatment[j]
+            emik = emax(dose[j], emaxv[t], ed50v[t])
+            δik = αv[j] - emik + emi1 # - αi1
+            target += normal_lpdf(δik, s/(k-1), τ * (2*(k-1)) / k )
+            s += δik
+            j += 1
+        end
+    end
+    target
+
+end
+function dnormal_lpdf(y, μ, τ, logrootτ, σ²)
+    @fastmath begin
+        z = y - μ
+        f = -0.5τ * abs2(z) + logrootτ
+        ∂f∂y = -τ * z
+        ∂f∂μ = τ * z
+        ∂f∂τ = -0.5abs2(z) + 0.5σ²
+    end
+    f, ∂f∂y, ∂f∂μ, ∂f∂τ
+end
+
+@generated function ∂EₘₐₓNMA()
+
+end
+
+
+push!(DISTRIBUTION_DIFF_RULES, :EₘₐₓNMA)
 
 #= 
 
