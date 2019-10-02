@@ -1197,8 +1197,9 @@ end
 push!(DISTRIBUTION_DIFF_RULES, :lsgg)
 
 
-
 emax(a, em, ed50) = em * a / (a + ed50)
+emaxi(a, em, ed50) = @fastmath a * em * ed50 / (1 + ed50 * a)
+emaxn(a, em, ed50) = @fastmath a*em*ed50 / (a + ed50)
 normal_lpdf(y, μ, nhτ, nlogrootτ) = nhτ * abs2(y-μ) - nlogrootτ
 @generated function EₘₐₓNMA(
     α::AbstractVector{T}, σᵤ::T, Eₘₐₓ::AbstractVector{T}, ED₅₀::AbstractVector{T}, σ::T,
@@ -1223,10 +1224,11 @@ normal_lpdf(y, μ, nhτ, nlogrootτ) = nhτ * abs2(y-μ) - nlogrootτ
         $([:($(Symbol(:vnlogrootτ_,k)) = vmul(vnh, SLEEFPirates.log($(Symbol(:vτma_,k))))) for k in 0:((padM>>>Wshift)-1)]...)
         @inbounds nhτ = $(Expr(:tuple, [:(($(Symbol(:vnhτ_,m>>>Wshift))[$(1+m&(W-1))]).value) for m in 0:padM-1]...))
         @inbounds nlogrootτ = $(Expr(:tuple, [:(($(Symbol(:vnlogrootτ_,m>>>Wshift))[$(1+m&(W-1))]).value) for m in 0:padM-1]...))
-        @inbounds for i in 1:$N
+        @fastmath @inbounds for i in 1:$N
             t = Treatments[j]
             αᵢ = α[j]
-            emi1 = t == 0 ? -αᵢ : emax(dose[j], Eₘₐₓ[t], ED₅₀[t]) - αᵢ
+            emi1 = αᵢ
+            t == 0 || (emi1 -= emax(dose[j], Eₘₐₓ[t], ED₅₀[t]))
             αᵢ *= ταr
             target -= 0.5αᵢ*αᵢ
             s = zero($T)
@@ -1234,7 +1236,7 @@ normal_lpdf(y, μ, nhτ, nlogrootτ) = nhτ * abs2(y-μ) - nlogrootτ
             for k in 1:col_lengths[i]-1
                 t = Treatments[j]
                 emik = emax(dose[j], Eₘₐₓ[t], ED₅₀[t])
-                δik = α[j] - emik + emi1 # - αi1
+                δik = α[j] - emik - emi1 # - αi1
                 # target += normal_lpdf(δik, s/(k-1), τ * (2*(k-1)) / k )
                 # @show δik, s/k, nhτ[k], nlogrootτ[k]
                 target += normal_lpdf(δik, s/k, nhτ[k], nlogrootτ[k])
@@ -1260,6 +1262,33 @@ end
     end
     f, dfda, dfdemax, dfded50
 end
+@inline function ∂emaxi(a, em, ed50)
+    #    f(a,b,c) = a*b*c / (1 + a*c)
+    # ∂f∂a(a,b,c) =   b*c / (1 + a*c)^2
+    # ∂f∂b(a,b,c) = a * c / (1 + a*c)
+    # ∂f∂c(a,b,c) = a*b   / (1 + a*c)^2
+    @fastmath begin
+        invdenom = 1 / muladd(ed50, a, one(ed50))
+        doseed50 = a * ed50
+        dfdemax = doseed50 * invdenom
+        f = dfdemax * em
+        emdivdenomdivdenom = em * invdenom * invdenom
+        dfda = emdivdenomdivdenom * ed50
+        dfded50 = emdivdenomdivdenom * a
+    end
+    f, dfda, dfdemax, dfded50
+end
+@inline function ∂emaxn(a, em, ed50)
+    @fastmath begin
+        invdenom = 1 / (ed50 + a)
+        dfdem = ed50 * a * invdenom
+        f = dfdem * em
+        eminvdenominvdenom = em * invdenom * invdenom
+        dfded50 = eminvdenominvdenom * a * a
+        dfda = eminvdenominvdenom * ed50 * ed50
+    end
+    f, dfda, dfdem, dfded50
+end
 function ∂normal_lpdf(y, μ, nhτ, nlogrootτ, nhσ²)
     @fastmath begin
         z = y - μ
@@ -1277,7 +1306,7 @@ end
     sp::StackPointer, α::AbstractVector{T}, σᵤ::T, Eₘₐₓ::AbstractFixedSizeVector{C,T}, ED₅₀::AbstractFixedSizeVector{C,T}, σ::T,
     treatments::StructuredMatrices.FixedSizeRaggedMatrix{M,N,P,<:Integer,<:Integer}, dose::AbstractVector{T},
     ::Val{track} = Val{(true,true,true,true,false,false)}()
-) where {C,T,M,N,P,track}
+) where {T,C,M,N,P,track}
     padM = PaddedMatrices.calc_padding(M-1, T)
     W, Wshift = VectorizationBase.pick_vector_width_shift(M-1)
     quote
