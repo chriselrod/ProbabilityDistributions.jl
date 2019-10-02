@@ -144,12 +144,99 @@ function ∂Bernoulli_logit(y::BitVector, α::AbstractVector{T}, ::Val{track} = 
     @assert y_is_param == false
     if α_is_param
         ∂α = similar(α)
-        return Bernoulli_logit!(∂α, y, α), ∂α
+        return ∂Bernoulli_logit!(∂α, y, α), ∂α
     else
         return Bernoulli_logit(y, α)
     end
 end
+function ∂Bernoulli_logit(sptr::StackPointer, y::BitVector, α::AbstractVector{T}, ::Val{track} = Val{(false,true)}()) where {T,track}
+    y_is_param, α_is_param = track
+    @assert y_is_param == false
+    if α_is_param
+        sptr, ∂α = similar(sptr, α)
+        return sptr, (∂Bernoulli_logit!(∂α, y, α), ∂α)
+    else
+        return sptr, Bernoulli_logit(y, α)
+    end
+end
 push!(DISTRIBUTION_DIFF_RULES, :Bernoulli_logit)
+
+function Binomial_logit_quote(T)
+    W = VectorizationBase.pick_vector_width(T)
+    q = quote
+        # $(Expr(:meta, :inline))
+        target = vbroadcast(Vec{$W,$T}, zero($T))
+        @vvectorize $T for i ∈ eachindex(s)
+            αᵢ = α[i]
+            invOmP = one($T) + SLEEFPirates.exp( αᵢ )
+            nlogOmP = log(invOmP)
+            target = vsub(target, N[i] * nlogOmP - s[i] * αᵢ)
+        end
+        target
+    end
+    simplify_expr(q)
+end
+
+@generated function Binomial_logit(
+    s::AbstractVector{T}, α::AbstractVector{T}, N::AbstractVector{T},
+    ::Val{track} = Val{(false,true,false)}()
+) where {track, T}
+    s_is_param, α_is_param, N_is_param = track
+    @assert !s_is_param && !N_is_param
+    Binomial_logit_quote(T)
+end
+
+function ∂Binomial_logit_quote(T)
+    W = VectorizationBase.pick_vector_width(T)
+    q = quote
+        # $(Expr(:meta, :inline))
+        target = vbroadcast(Vec{$W,$T}, zero($T))
+        @vvectorize $T for i ∈ eachindex(s)
+            αᵢ = α[i]
+            expαᵢ = SLEEFPirates.exp( αᵢ )
+            invOmP = ( one($T) + expαᵢ )
+            ∂logP = one($T) / invOmP
+            nlogOmP = SLEEFPirates.log(invOmP)
+            sᵢ = s[i]; Nᵢ = N[i]
+            target = vsub(target, Nᵢ * nlogOmP - sᵢ * αᵢ )
+            ∂α[i] = sᵢ - Nᵢ * ∂logP * expαᵢ
+        end
+        target
+    end
+    simplify_expr(q)
+end
+
+@generated function ∂Binomial_logit!(
+    ∂α::AbstractVector{T}, s::AbstractVector{T}, α::AbstractVector{T}, N::AbstractVector{T}
+) where {T}
+    # y_is_param, α_is_param = track
+    # @assert y_is_param == false
+    # α_is_param ? ∂Bernoulli_logit_quote(T) : Bernoulli_logit_quote(T)
+    ∂Binomial_logit_quote(T)
+end
+
+function ∂Binomial_logit(s::AbstractVector{T}, α::AbstractVector{T}, N::AbstractVector{T}, ::Val{track} = Val{(false,true,false)}()) where {T,track}
+    s_is_param, α_is_param, N_is_param = track
+    @assert !s_is_param && !N_is_param
+    if α_is_param
+        ∂α = similar(α)
+        return ∂Binomial_logit!(∂α, s, α, N), ∂α
+    else
+        return Binomial_logit(s, α, N)
+    end
+end
+function ∂Binomial_logit(sptr::StackPointer, s::AbstractVector{T}, α::AbstractVector{T}, N::AbstractVector{T}, ::Val{track} = Val{(false,true,false)}()) where {T,track}
+    s_is_param, α_is_param, N_is_param = track
+    @assert !s_is_param && !N_is_param
+    if α_is_param
+        sptr, ∂α = similar(sptr, α)
+        return sptr, (∂Binomial_logit!(∂α, s, α, N), ∂α')
+    else
+        return sptr, Binomial_logit(s, α, N)
+    end
+end
+
+push!(DISTRIBUTION_DIFF_RULES, :Binomial_logit)
 
 
 @generated function Bernoulli_logit_fmadd(y::BitVector, X::AbstractMatrix{T}, β::AbstractVector{T}, α::AbstractFloat,
@@ -1114,17 +1201,18 @@ push!(DISTRIBUTION_DIFF_RULES, :lsgg)
 emax(a, em, ed50) = em * a / (a + ed50)
 normal_lpdf(y, μ, nhτ, nlogrootτ) = nhτ * abs2(y-μ) - nlogrootτ
 @generated function EₘₐₓNMA(
-    α::AbstractVector{T}, Eₘₐₓ::AbstractVector{T}, ED₅₀::AbstractVector{T}, σ::T,
-    Treatments::StructuredMatrices.FixedSizeRaggedMatrix{M,N,P,<:Integer,<:Integer}, Doses::AbstractVector{T},
-    ::Val{track}() = Val{(true,true,true,true,false,false)}
+    α::AbstractVector{T}, σᵤ::T, Eₘₐₓ::AbstractVector{T}, ED₅₀::AbstractVector{T}, σ::T,
+    Treatments::StructuredMatrices.FixedSizeRaggedMatrix{M,N,P,<:Integer,<:Integer}, dose::AbstractVector{T},
+    ::Val{track} = Val{(true,true,true,true,true,false,false)}()
 ) where {T, track, M, N, P}
-    track_α, track_Eₘₐₓ, track_ED₅₀, track_σ, track_treat, track_dose = track
+    track_α, track_σᵤ, track_Eₘₐₓ, track_ED₅₀, track_σ, track_treat, track_dose = track
     @assert track_treat == false && track_dose == false
-    padM = PaddedMatrices.calc_padding(M-1)
+    padM = PaddedMatrices.calc_padding(M-1, T)
     W, Wshift = VectorizationBase.pick_vector_width_shift(M-1)
 
     quote
-        target = zero(T)
+        target = zero($T)
+        ταr = 1 / σᵤ
         τ = 1 / (σ*σ)
         j = 1
         col_lengths = Treatments.column_lengths
@@ -1132,25 +1220,29 @@ normal_lpdf(y, μ, nhτ, nlogrootτ) = nhτ * abs2(y-μ) - nlogrootτ
         vnh = SIMDPirates.vbroadcast(Vec{$W,$T}, $(T(-0.5)))
         $([:($(Symbol(:vτma_,k)) = vmul(vτ, $(Expr(:tuple, [Core.VecElement{T}(2m/(m+1)) for m in k*W+1:k*W+padM]...)))) for k in 0:((padM>>>Wshift)-1)]...)
         $([:($(Symbol(:vnhτ_,k)) = vmul(vnh, $(Symbol(:vτma_,k)))) for k in 0:((padM>>>Wshift)-1)]...)
-        $([:($(Symbol(:vnlogrootτ_,k)) = vmul(vnh, $(Symbol(:vτma_,k)))) for k in 0:((padM>>>Wshift)-1)]...)
+        $([:($(Symbol(:vnlogrootτ_,k)) = vmul(vnh, SLEEFPirates.log($(Symbol(:vτma_,k))))) for k in 0:((padM>>>Wshift)-1)]...)
         @inbounds nhτ = $(Expr(:tuple, [:(($(Symbol(:vnhτ_,m>>>Wshift))[$(1+m&(W-1))]).value) for m in 0:padM-1]...))
         @inbounds nlogrootτ = $(Expr(:tuple, [:(($(Symbol(:vnlogrootτ_,m>>>Wshift))[$(1+m&(W-1))]).value) for m in 0:padM-1]...))
-        for i in eachindex(col_lengths)
+        @inbounds for i in 1:$N
             t = Treatments[j]
-            emi1 = emax(dose[j], emaxv[t], ed50v[t]) - αv[j]
-            s = zero(T)
+            αᵢ = α[j]
+            emi1 = t == 0 ? -αᵢ : emax(dose[j], Eₘₐₓ[t], ED₅₀[t]) - αᵢ
+            αᵢ *= ταr
+            target -= 0.5αᵢ*αᵢ
+            s = zero($T)
             j += 1
             for k in 1:col_lengths[i]-1
                 t = Treatments[j]
-                emik = emax(dose[j], emaxv[t], ed50v[t])
-                δik = αv[j] - emik + emi1 # - αi1
+                emik = emax(dose[j], Eₘₐₓ[t], ED₅₀[t])
+                δik = α[j] - emik + emi1 # - αi1
                 # target += normal_lpdf(δik, s/(k-1), τ * (2*(k-1)) / k )
+                # @show δik, s/k, nhτ[k], nlogrootτ[k]
                 target += normal_lpdf(δik, s/k, nhτ[k], nlogrootτ[k])
                 s += δik
                 j += 1
             end
         end
-        target
+        muladd($(T(N)), log(ταr), target)
     end
 end
 @inline function ∂emax(a, em, ed50)
@@ -1173,7 +1265,7 @@ function ∂normal_lpdf(y, μ, nhτ, nlogrootτ, nhσ²)
         z = y - μ
         nτ = nhτ + nhτ
         z² = z * z
-        f = nhτ * z² - logrootτ
+        f = nhτ * z² - nlogrootτ
         ∂f∂y = nτ * z
         ∂f∂μ = -∂f∂y
         ∂f∂τ =  - 0.5 * z² - nhσ²
@@ -1181,76 +1273,105 @@ function ∂normal_lpdf(y, μ, nhτ, nlogrootτ, nhσ²)
     f, ∂f∂y, ∂f∂μ, ∂f∂τ
 end
 
-@generated function ∂EₘₐₓNMA()
-    target = 0.0
-    @inbounds for i in eachindex(demaxv)#, ded50v)
-        ded50v[i] = 0.0
-        demaxv[i] = 0.0
-    end
-    invσ = 1/σ
-    # σ² =  σ * σ
-    τ = abs2(invσ)
-    dτdσ = -2τ*invσ
-    # tau, dtaudsigma = 1/abs2(sigma), -2/sigma^3
-    j = 1
-    dτ = zero(σ)
-    col_lengths = treatment.column_lengths
-    
-    vτ = SIMDPirates.vbroadcast(Vec{$W,$T}, τ)
-    vnh = SIMDPirates.vbroadcast(Vec{$W,$T}, $(T(-0.5)))
-    $([:($(Symbol(:vτma_,k)) = vmul(vτ, $(Expr(:tuple, [Core.VecElement{T}(2m/(m+1)) for m in k*W+1:k*W+padM]...)))) for k in 0:((padM>>>Wshift)-1)]...)
-    $([:($(Symbol(:vnhτ_,k)) = vmul(vnh, $(Symbol(:vτma_,k)))) for k in 0:((padM>>>Wshift)-1)]...)
-    $([:($(Symbol(:vnhσ²_,k)) = SIMDPirates.vinv($(Symbol(:vnhτ_,k)))) for k in 0:((padM>>>Wshift)-1)]...)
-    $([:($(Symbol(:vnlogrootτ_,k)) = vmul(vnh, $(Symbol(:vτma_,k)))) for k in 0:((padM>>>Wshift)-1)]...)
-    @inbounds nhτ = $(Expr(:tuple, [:(($(Symbol(:vnhτ_,m>>>Wshift))[$(1+m&(W-1))]).value) for m in 0:padM-1]...))
-    @inbounds nlogrootτ = $(Expr(:tuple, [:(($(Symbol(:vnlogrootτ_,m>>>Wshift))[$(1+m&(W-1))]).value) for m in 0:padM-1]...))
-    @inbounds nhσ² = $(Expr(:tuple, [:(($(Symbol(:vnhσ²_,m>>>Wshift))[$(1+m&(W-1))]).value) for m in 0:padM-1]...))
-
-    logτs = ntuple(Val(7)) do k log(τ*2k/(k+1)) end
-    @fastmath @inbounds for i in eachindex(col_lengths)
-        ti = treatment[j]
-        ji = j
-        emi1, demi1ddose, demi1demaxv, demi1ded50v = demax(dose[j], emaxv[ti], ed50v[ti])
-        αi1 = αv[ji]
-        emi1minusαi1 = emi1 - αi1
-        dtargetdαi = 0.0
-        dtargetdemaxv = 0.0
-        dtargetded50v = 0.0
-        s = 0.0
-        j += 1
-        # fill!(dsdemax, 0.0)
-        for k in 1:col_lengths[i]-1
-            t = treatment[j]
-            emik, demikddose, demikdemaxv, demikded50v = demax(dose[j], emaxv[t], ed50v[t])
-            δik = αv[j] - emik + emi1minusαi1
-            τscale = (2*k) / (k+1)
-            sscale = 1 / k
-            # f, dfdy, dfdμ, dfdτ = dnormal_lpdf( δik, s*sscale, τ * τscale, logτs[k-1] )
-            f, dfdy, dfdμ, dfdτ = dnormal_lpdf( δik, s*sscale, ntτ[k], nlogrootτ[k], nhσ²[k] )
-            target += f
-            dτ += dfdτ * τscale
-            dtargetdαi -= dfdy * sscale
-            dtargetdemaxv += dfdy*demi1demaxv*sscale
-            dtargetded50v += dfdy*demi1ded50v*sscale
-            for p in 1:k-1
-                tp = treatment[j + p - k]
-                dαv[j + p - k] += dfdμ*sscale
-                demaxv[tp] -= dsdemax[1,p]*dfdμ*sscale
-                ded50v[tp] -= dsdemax[2,p]*dfdμ*sscale
-            end
-            dαv[j] = dfdy
-            demaxv[t] -= dfdy*demikdemaxv
-            ded50v[t] -= dfdy*demikded50v
-            dsdemax[1,k] = demikdemaxv
-            dsdemax[2,k] = demikded50v
-            s += δik
-            j += 1
+@generated function ∂EₘₐₓNMA(
+    sp::StackPointer, α::AbstractVector{T}, σᵤ::T, Eₘₐₓ::AbstractFixedSizeVector{C,T}, ED₅₀::AbstractFixedSizeVector{C,T}, σ::T,
+    treatments::StructuredMatrices.FixedSizeRaggedMatrix{M,N,P,<:Integer,<:Integer}, dose::AbstractVector{T},
+    ::Val{track} = Val{(true,true,true,true,false,false)}()
+) where {C,T,M,N,P,track}
+    padM = PaddedMatrices.calc_padding(M-1, T)
+    W, Wshift = VectorizationBase.pick_vector_width_shift(M-1)
+    quote
+        sp, dαv = PtrVector{$P,$T}(sp)
+        sp, demaxv = PtrVector{$C,$T}(sp)
+        sp, ded50v = PtrVector{$C,$T}(sp)
+        dsdemax = PtrMatrix{2,$M,$T}(pointer(sp,$T))
+        target = zero($T)
+        @inbounds for i in eachindex(demaxv)#, ded50v)
+            ded50v[i] = zero($T)
+            demaxv[i] = zero($T)
         end
-        dαv[ji] = dtargetdαi
-        demaxv[ti] += dtargetdemaxv
-        ded50v[ti] += dtargetded50v
+        invσ = 1/σ
+        # σ² =  σ * σ
+        τ = abs2(invσ)
+        dτdσ = -2τ*invσ
+        # @show dτdσ
+        # tau, dtaudsigma = 1/abs2(sigma), -2/sigma^3
+        j = 1
+        dτ = zero(σ)
+        col_lengths = treatments.column_lengths
+        ταr = 1 / σᵤ
+        ταr² = ταr * ταr
+        dταrdσᵤ = -ταr * ταr
+        dταr = zero($T)
+        vτ = SIMDPirates.vbroadcast(Vec{$W,$T}, τ)
+        vnh = SIMDPirates.vbroadcast(Vec{$W,$T}, $(T(-0.5)))
+        $([:($(Symbol(:vτma_,k)) = vmul(vτ, $(Expr(:tuple, [Core.VecElement{T}(2m/(m+1)) for m in k*W+1:k*W+padM]...)))) for k in 0:((padM>>>Wshift)-1)]...)
+        $([:($(Symbol(:vnhτ_,k)) = vmul(vnh, $(Symbol(:vτma_,k)))) for k in 0:((padM>>>Wshift)-1)]...)
+        $([:($(Symbol(:vnhσ²_,k)) = SIMDPirates.vfdiv(vnh,$(Symbol(:vτma_,k)))) for k in 0:((padM>>>Wshift)-1)]...)
+        $([:($(Symbol(:vnlogrootτ_,k)) = vmul(vnh, SLEEFPirates.log($(Symbol(:vτma_,k))))) for k in 0:((padM>>>Wshift)-1)]...)
+        τscales = $(Expr(:tuple, [T(2k/(k+1)) for k in 1:padM]...))
+        @inbounds nhτ = $(Expr(:tuple, [:(($(Symbol(:vnhτ_,m>>>Wshift))[$(1+m&(W-1))]).value) for m in 0:padM-1]...))
+        @inbounds nlogrootτ = $(Expr(:tuple, [:(($(Symbol(:vnlogrootτ_,m>>>Wshift))[$(1+m&(W-1))]).value) for m in 0:padM-1]...))
+        @inbounds nhσ² = $(Expr(:tuple, [:(($(Symbol(:vnhσ²_,m>>>Wshift))[$(1+m&(W-1))]).value) for m in 0:padM-1]...))
+        @fastmath @inbounds for i in 1:$N
+            ti = treatments[j]
+            ji = j
+            αi1 = α[ji]
+            if ti == 0
+                emi1, demi1ddose, demi1demaxv, demi1ded50v = (zero($T),zero($T),zero($T),zero($T))
+            else
+                emi1, demi1ddose, demi1demaxv, demi1ded50v = ∂emax(dose[j], Eₘₐₓ[ti], ED₅₀[ti])
+            end
+            αi1²ταr = αi1 * αi1 * ταr
+            target -= 0.5 * αi1²ταr * ταr
+            dταr -= αi1²ταr
+            dtargetdαin = αi1*ταr²
+            emi1minusαi1 = emi1 - αi1
+            dtargetdαi = zero($T)
+            dtargetdemaxv = zero($T)
+            dtargetded50v = zero($T)
+            s = zero($T)
+            j += 1
+            # fill!(dsdemax, 0.0)
+            for k in 1:col_lengths[i]-1
+                t = treatments[j]
+                emik, demikddose, demikdemaxv, demikded50v = ∂emax(dose[j], Eₘₐₓ[t], ED₅₀[t])
+                δik = α[j] - emik + emi1minusαi1
+                sscale = 1 / k
+                # f, dfdy, dfdμ, dfdτ = dnormal_lpdf( δik, s*sscale, τ * τscale, logτs[k-1] )
+                f, dfdy, dfdμ, dfdτ = ∂normal_lpdf( δik, s*sscale, nhτ[k], nlogrootτ[k], nhσ²[k] )
+                target += f
+                # @show dfdτ, τscales[k]
+                dτ += dfdτ * τscales[k]
+                dtargetdαi -= dfdy * sscale
+                if ti > 0
+                    dtargetdemaxv += dfdy*demi1demaxv*sscale
+                    dtargetded50v += dfdy*demi1ded50v*sscale
+                end
+                for p in 1:k-1
+                    tp = treatments[j + p - k]
+                    dαv[j + p - k] += dfdμ*sscale
+                    demaxv[tp] -= dsdemax[1,p]*dfdμ*sscale
+                    ded50v[tp] -= dsdemax[2,p]*dfdμ*sscale
+                end
+                dαv[j] = dfdy
+                demaxv[t] -= dfdy*demikdemaxv
+                ded50v[t] -= dfdy*demikded50v
+                dsdemax[1,k] = demikdemaxv
+                dsdemax[2,k] = demikded50v
+                s += δik
+                j += 1
+            end
+            dαv[ji] = dtargetdαi - dtargetdαin
+            if ti > 0
+                demaxv[ti] += dtargetdemaxv
+                ded50v[ti] += dtargetded50v
+            end
+        end
+        target = muladd($(T(N)), Base.log(ταr), target)
+        dταr = muladd($(T(N)), σᵤ, dταr)
+        sp, (target, dαv', dταrdσᵤ*dταr, demaxv', ded50v', dτ*dτdσ)
     end
-    target, dαv, demaxv, ded50v, dτ*dτdσ
 end
 
 
