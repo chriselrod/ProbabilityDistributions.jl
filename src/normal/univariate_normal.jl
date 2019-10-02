@@ -9,11 +9,11 @@ function univariate_normal_quote(
     if partial
         X = Vector{Int}(undef, N)
         X[1] = 1
-        if N > 1
-            X[2] = P
-        end
-        for n in 3:N
-            X[n] = X[n-1] * (S.parameters[n])::Int
+        # if N > 1
+        #     X[2] = P
+        # end
+        for n in 2:N
+            X[n] = X[n-1] * (S.parameters[n-1])::Int
         end
         P = Tuple{X...}
     end
