@@ -1188,7 +1188,8 @@ end
 ) where {M,P,T,track,PY,PX,PK,K_,Sβ,Nβ,Pβ}
 # ) where {M,P,T,track,PY,PX,PK,Sβ,Nβ,Pβ,K_}
     @assert Sβ.parameters[1] == K_
-    multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, βstride = (Pβ.parameters[2])::Int, Xstride = PX, βdim = Nβ, XP = K_)
+    βstride = length(Pβ.parameters) == 1 ? K_ : (Pβ.parameters[2])::Int
+    multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, βstride = βstride, Xstride = PX, βdim = Nβ, XP = K_)
 end
 @generated function Normal(
     sptr::StackPointer,
@@ -1200,7 +1201,8 @@ end
 ) where {M,P,T,track,PY,PX,PK,K_,Sβ,Nβ,Pβ}
 # ) where {M,P,T,track,PY,PX,PK,Sβ,Nβ,Pβ,K_}
     @assert Sβ.parameters[1] == K_
-    multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, βstride = (Pβ.parameters[2])::Int, Xstride = PX, βdim = Nβ, XP = K_)
+    βstride = length(Pβ.parameters) == 1 ? K_ : (Pβ.parameters[2])::Int
+    multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, βstride = βstride, Xstride = PX, βdim = Nβ, XP = K_)
 end
 
     # M::Union{Symbol,Integer}, P::Int, track::NTuple{D,Bool}, T::DataType = Float64;
@@ -1216,14 +1218,15 @@ end
 # ) where {M,P,T,track,PY,PX,K_,Sβ,Nβ,Pβ,Tμ}
 ) where {M,P,T,track,PY,PX,Sβ,Nβ,Pβ,Tμ,K_}
     @assert Sβ.parameters[1] == K_
+    βstride = length(Pβ.parameters) == 1 ? K_ : (Pβ.parameters[2])::Int
     if Tμ === T
-        multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, βstride = (Pβ.parameters[2])::Int, Xstride = PX, βdim = Nβ, XP = K_, μdim = 0, μstride = 0)
+        multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, βstride = βstride, Xstride = PX, βdim = Nβ, XP = K_, μdim = 0, μstride = 0)
     elseif Tμ <: LinearAlgebra.Adjoint{T,<:PaddedMatrices.AbstractMutableFixedSizeVector}
-        multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, βstride = (Pβ.parameters[2])::Int, Xstride = PX, βdim = Nβ, XP = K_, μdim = 1, μstride = 1, μtransposed = true)
+        multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, βstride = βstride, Xstride = PX, βdim = Nβ, XP = K_, μdim = 1, μstride = 1, μtransposed = true)
     elseif Tμ <: AbstractFixedSizeVector
-        multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, βstride = (Pβ.parameters[2])::Int, Xstride = PX, βdim = Nβ, XP = K_, μdim = 1, μstride = 1)
+        multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, βstride = βstride, Xstride = PX, βdim = Nβ, XP = K_, μdim = 1, μstride = 1)
     elseif Tμ <: AbstractFixedSizeMatrix
-        multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, βstride = (Pβ.parameters[2])::Int, Xstride = PX, βdim = Nβ, XP = K_, μdim = 2, μstride = (Tμ.parameters[4].parameters[2])::Int)
+        multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, βstride = βstride, Xstride = PX, βdim = Nβ, XP = K_, μdim = 2, μstride = (Tμ.parameters[4].parameters[2])::Int)
     else
         throw("Type of μ == $A is not recognized.")
     end
@@ -1239,14 +1242,15 @@ end
 ) where {M,P,T,track,PY,PX,K_,Sβ,Nβ,Pβ,Tμ}
 # ) where {M,P,T,track,PY,PX,Sβ,Nβ,Pβ,Tμ,K_}
     @assert Sβ.parameters[1] == K_
+    βstride = length(Pβ.parameters) == 1 ? K_ : (Pβ.parameters[2])::Int
     if Tμ === T
-        multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, βstride = (Pβ.parameters[2])::Int, Xstride = PX, βdim = Nβ, XP = K_, μdim = 0, μstride = 0)
+        multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, βstride = βstride, Xstride = PX, βdim = Nβ, XP = K_, μdim = 0, μstride = 0)
     elseif Tμ <: LinearAlgebra.Adjoint{T,<:PaddedMatrices.AbstractMutableFixedSizeVector}
-        multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, βstride = (Pβ.parameters[2])::Int, Xstride = PX, βdim = Nβ, XP = K_, μdim = 1, μstride = 1, μtransposed = true)
+        multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, βstride = βstride, Xstride = PX, βdim = Nβ, XP = K_, μdim = 1, μstride = 1, μtransposed = true)
     elseif Tμ <: AbstractFixedSizeVector
-        multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, βstride = (Pβ.parameters[2])::Int, Xstride = PX, βdim = Nβ, XP = K_, μdim = 1, μstride = 1)
+        multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, βstride = βstride, Xstride = PX, βdim = Nβ, XP = K_, μdim = 1, μstride = 1)
     elseif Tμ <: AbstractFixedSizeMatrix
-        multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, βstride = (Pβ.parameters[2])::Int, Xstride = PX, βdim = Nβ, XP = K_, μdim = 2, μstride = (Tμ.parameters[4].parameters[2])::Int)
+        multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, βstride = βstride, Xstride = PX, βdim = Nβ, XP = K_, μdim = 2, μstride = (Tμ.parameters[4].parameters[2])::Int)
     else
         throw("Type of μ == $A is not recognized.")
     end
@@ -1355,8 +1359,9 @@ end
     ::Val{track} = Val{(true,true,true,true)}()
 ) where {P,T,track,PK,Sβ,Nβ,Pβ}
     K_ = Sβ.parameters[1]
+    βstride = length(Pβ.parameters) == 1 ? K_ : (Pβ.parameters[2])::Int
     M, PY, PX = gensym(:M), gensym(:PY), gensym(:PX)
-    q = multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, βstride = (Pβ.parameters[2])::Int, Xstride = PX, βdim = Nβ, XP = K_)
+    q = multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, βstride = βstride, Xstride = PX, βdim = Nβ, XP = K_)
     quote
         $M = size(Y,1)
         $PY = $(Y <: Array ? M : :(stride(Y,2)))
@@ -1373,8 +1378,9 @@ end
     ::Val{track} = Val{(true,true,true,true)}()
 ) where {P,T,track,PK,Sβ,Nβ,Pβ}
     K_ = Sβ.parameters[1]
+    βstride = length(Pβ.parameters) == 1 ? K_ : (Pβ.parameters[2])::Int
     M, PY, PX = gensym(:M), gensym(:PY), gensym(:PX)
-    q = multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, βstride = (Pβ.parameters[2])::Int, Xstride = PX, βdim = Nβ, XP = K_)
+    q = multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, βstride = βstride, Xstride = PX, βdim = Nβ, XP = K_)
     quote
         $M = size(Y,1)
         $PY = $(Y <: Array ? M : :(stride(Y,2)))
@@ -1395,6 +1401,7 @@ end
     ::Val{track} = Val{(true,true,true,true,true)}()
 ) where {P,T,track,Sβ,Nβ,Pβ,Tμ}
     K_ = Sβ.parameters[1]
+    βstride = length(Pβ.parameters) == 1 ? K_ : (Pβ.parameters[2])::Int
     M, PY, PX = gensym(:M), gensym(:PY), gensym(:PX)
     defs_quote = quote
         $M = size(Y,1)
@@ -1402,17 +1409,17 @@ end
         $PX = $(X <: Array ? M : :(stride(X,2)))
     end
     q = if Tμ === T
-        multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, βstride = (Pβ.parameters[2])::Int, Xstride = PX, βdim = Nβ, XP = K_, μdim = 0, μstride = 0)
+        multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, βstride = βstride, Xstride = PX, βdim = Nβ, XP = K_, μdim = 0, μstride = 0)
     elseif Tμ <: LinearAlgebra.Adjoint{T,<:PaddedMatrices.AbstractMutableFixedSizeVector}
-        multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, βstride = (Pβ.parameters[2])::Int, Xstride = PX, βdim = Nβ, XP = K_, μdim = 1, μstride = 1, μtransposed = true)
+        multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, βstride = βstride, Xstride = PX, βdim = Nβ, XP = K_, μdim = 1, μstride = 1, μtransposed = true)
     elseif Tμ <: AbstractFixedSizeVector
-        multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, βstride = (Pβ.parameters[2])::Int, Xstride = PX, βdim = Nβ, XP = K_, μdim = 1, μstride = 1)
+        multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, βstride = βstride, Xstride = PX, βdim = Nβ, XP = K_, μdim = 1, μstride = 1)
     elseif Tμ <: AbstractFixedSizeMatrix
-        multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, βstride = (Pβ.parameters[2])::Int, Xstride = PX, βdim = Nβ, XP = K_, μdim = 2, μstride = (Tμ.parameters[4].parameters[2])::Int)
+        multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, βstride = βstride, Xstride = PX, βdim = Nβ, XP = K_, μdim = 2, μstride = (Tμ.parameters[4].parameters[2])::Int)
     elseif Tμ <: AbstractMatrix
         μstride = gensym(:μstride)
         push!(defs_quote.args, :($μstride = stride(μ,2)))
-        multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, βstride = (Pβ.parameters[2])::Int, Xstride = PX, βdim = Nβ, XP = K_, μdim = 2, μstride = μstride)
+        multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, βstride = βstride, Xstride = PX, βdim = Nβ, XP = K_, μdim = 2, μstride = μstride)
     else
         throw("Type of μ == $A is not recognized.")
     end
@@ -1431,6 +1438,7 @@ end
     ::Val{track} = Val{(true,true,true,true,true)}()
 ) where {P,T,track,Sβ,Nβ,Pβ,Tμ}
     K_ = Sβ.parameters[1]
+    βstride = length(Pβ.parameters) == 1 ? K_ : (Pβ.parameters[2])::Int
     M, PY, PX = gensym(:M), gensym(:PY), gensym(:PX)
     defs_quote = quote
         $M = size(Y,1)
@@ -1438,17 +1446,17 @@ end
         $PX = $(X <: Array ? M : :(stride(X,2)))
     end
     q = if Tμ === T
-        multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, βstride = (Pβ.parameters[2])::Int, Xstride = PX, βdim = Nβ, XP = K_, μdim = 0, μstride = 0)
+        multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, βstride = βstride, Xstride = PX, βdim = Nβ, XP = K_, μdim = 0, μstride = 0)
     elseif Tμ <: LinearAlgebra.Adjoint{T,<:PaddedMatrices.AbstractMutableFixedSizeVector}
-        multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, βstride = (Pβ.parameters[2])::Int, Xstride = PX, βdim = Nβ, XP = K_, μdim = 1, μstride = 1, μtransposed = true)
+        multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, βstride = βstride, Xstride = PX, βdim = Nβ, XP = K_, μdim = 1, μstride = 1, μtransposed = true)
     elseif Tμ <: AbstractFixedSizeVector
-        multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, βstride = (Pβ.parameters[2])::Int, Xstride = PX, βdim = Nβ, XP = K_, μdim = 1, μstride = 1)
+        multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, βstride = βstride, Xstride = PX, βdim = Nβ, XP = K_, μdim = 1, μstride = 1)
     elseif Tμ <: AbstractFixedSizeMatrix
-        multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, βstride = (Pβ.parameters[2])::Int, Xstride = PX, βdim = Nβ, XP = K_, μdim = 2, μstride = (Tμ.parameters[4].parameters[2])::Int)
+        multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, βstride = βstride, Xstride = PX, βdim = Nβ, XP = K_, μdim = 2, μstride = (Tμ.parameters[4].parameters[2])::Int)
     elseif Tμ <: AbstractMatrix
         μstride = gensym(:μstride)
         push!(defs_quote.args, :($μstride = stride(μ,2)))
-        multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, βstride = (Pβ.parameters[2])::Int, Xstride = PX, βdim = Nβ, XP = K_, μdim = 2, μstride = μstride)
+        multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, βstride = βstride, Xstride = PX, βdim = Nβ, XP = K_, μdim = 2, μstride = μstride)
     else
         throw("Type of μ == $A is not recognized.")
     end
@@ -2386,7 +2394,8 @@ end
 # ) where {M,P,T,track,PY,PX,Sβ,Nβ,Pβ,K_}
 ) where {M,P,T,track,K_,PY,PX,Sβ,Nβ,Pβ}
     @assert Sβ.parameters[1] == K_
-    ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, Xstride = PX, βstride = (Pβ.parameters[2])::Int, βdim = Nβ, XP = K_)
+    βstride = length(Pβ.parameters) == 1 ? K_ : (Pβ.parameters[2])::Int
+    ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, Xstride = PX, βstride = βstride, βdim = Nβ, XP = K_)
 end
 @generated function ∂Normal(
     sptr::StackPointer,
@@ -2398,7 +2407,8 @@ end
 # ) where {M,P,T,track,PY,PX,Sβ,Nβ,Pβ,K_}
 ) where {M,P,T,track,K_,PY,PX,Sβ,Nβ,Pβ}
     @assert Sβ.parameters[1] == K_
-    ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, Xstride = PX, βstride = (Pβ.parameters[2])::Int, βdim = Nβ, XP = K_)
+    βstride = length(Pβ.parameters) == 1 ? K_ : (Pβ.parameters[2])::Int
+    ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, Xstride = PX, βstride = βstride, βdim = Nβ, XP = K_)
 end
 
 
@@ -2415,14 +2425,15 @@ end
 # ) where {M,P,T,track,K_,PY,PX,Sβ,Nβ,Pβ,Tμ}
 ) where {M,P,T,track,K_,PY,PX,Tμ,Sβ,Nβ,Pβ}
     @assert Sβ.parameters[1] == K_
+    βstride = length(Pβ.parameters) == 1 ? K_ : (Pβ.parameters[2])::Int
     if Tμ === T
-        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, Xstride = PX, βstride = (Pβ.parameters[2])::Int, βdim = Nβ, XP = K_, μdim = 0, μstride = 0)
+        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, Xstride = PX, βstride = βstride, βdim = Nβ, XP = K_, μdim = 0, μstride = 0)
     elseif Tμ <: LinearAlgebra.Adjoint{T,<:AbstractMutableFixedSizeVector}
-        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, Xstride = PX, βstride = (Pβ.parameters[2])::Int, βdim = Nβ, XP = K_, μdim = 1, μstride = 1, μtransposed = true)
+        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, Xstride = PX, βstride = βstride, βdim = Nβ, XP = K_, μdim = 1, μstride = 1, μtransposed = true)
     elseif Tμ <: AbstractMutableFixedSizeVector
-        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, Xstride = PX, βstride = (Pβ.parameters[2])::Int, βdim = Nβ, XP = K_, μdim = 1, μstride = 1)
+        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, Xstride = PX, βstride = βstride, βdim = Nβ, XP = K_, μdim = 1, μstride = 1)
     elseif Tμ <: AbstractMutableFixedSizeMatrix
-        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, Xstride = PX, βstride = (Pβ.parameters[2])::Int, βdim = Nβ, XP = K_, μdim = 2, μstride = (Tμ.parameters[4].parameters[2])::Int)
+        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, Xstride = PX, βstride = βstride, βdim = Nβ, XP = K_, μdim = 2, μstride = (Tμ.parameters[4].parameters[2])::Int)
     else
         throw("Type of μ = $(Tμ) was not recognized.")
     end
@@ -2438,14 +2449,15 @@ end
 ) where {M,P,T,track,K_,PY,PX,Sβ,Nβ,Pβ,Tμ}
 # ) where {M,P,T,track,K_,PY,PX,Tμ,Sβ,Nβ,Pβ}
     @assert Sβ.parameters[1] == K_
+    βstride = length(Pβ.parameters) == 1 ? K_ : (Pβ.parameters[2])::Int
     if Tμ === T
-        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, Xstride = PX, βstride = (Pβ.parameters[2])::Int, βdim = Nβ, XP = K_, μdim = 0, μstride = 0)
+        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, Xstride = PX, βstride = βstride, βdim = Nβ, XP = K_, μdim = 0, μstride = 0)
     elseif Tμ <: LinearAlgebra.Adjoint{T,<:AbstractMutableFixedSizeVector}
-        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, Xstride = PX, βstride = (Pβ.parameters[2])::Int, βdim = Nβ, XP = K_, μdim = 1, μstride = 1, μtransposed = true)
+        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, Xstride = PX, βstride = βstride, βdim = Nβ, XP = K_, μdim = 1, μstride = 1, μtransposed = true)
     elseif Tμ <: AbstractMutableFixedSizeVector
-        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, Xstride = PX, βstride = (Pβ.parameters[2])::Int, βdim = Nβ, XP = K_, μdim = 1, μstride = 1)
+        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, Xstride = PX, βstride = βstride, βdim = Nβ, XP = K_, μdim = 1, μstride = 1)
     elseif Tμ <: AbstractMutableFixedSizeMatrix
-        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, Xstride = PX, βstride = (Pβ.parameters[2])::Int, βdim = Nβ, XP = K_, μdim = 2, μstride = (Tμ.parameters[4].parameters[2])::Int)
+        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, Xstride = PX, βstride = βstride, βdim = Nβ, XP = K_, μdim = 2, μstride = (Tμ.parameters[4].parameters[2])::Int)
     else
         throw("Type of μ = $(Tμ) was not recognized.")
     end
@@ -2572,7 +2584,8 @@ end
 ) where {T,P,track,Sβ,Nβ,Pβ}
     M, PY, PX = gensym(:M), gensym(:PY), gensym(:PX)
     K_ = Sβ.parameters[1]
-    q = ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, Xstride = PX, βstride = (Pβ.parameters[2])::Int, βdim = Nβ, XP = K_)
+    βstride = length(Pβ.parameters) == 1 ? K_ : (Pβ.parameters[2])::Int
+    q = ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, Xstride = PX, βstride = βstride, βdim = Nβ, XP = K_)
     quote
         $M = size(Y,1)
         $PY = $(Y <: Array ? M : :(stride(Y,2)))
@@ -2591,7 +2604,8 @@ end
 ) where {T,P,track,Sβ,Nβ,Pβ}
     M, PY, PX = gensym(:M), gensym(:PY), gensym(:PX)
     K_ = Sβ.parameters[1]
-    q = ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, Xstride = PX, βstride = (Pβ.parameters[2])::Int, βdim = Nβ, XP = K_)
+    βstride = length(Pβ.parameters) == 1 ? K_ : (Pβ.parameters[2])::Int
+    q = ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, Xstride = PX, βstride = βstride, βdim = Nβ, XP = K_)
     quote
         $M = size(Y,1)
         $PY = $(Y <: Array ? M : :(stride(Y,2)))
@@ -2615,23 +2629,24 @@ end
 # ) where {T,P,track,Tμ,Sβ,Nβ,Pβ}
     M, PY, PX = gensym(:M), gensym(:PY), gensym(:PX)
     K_ = Sβ.parameters[1]
+    βstride = length(Pβ.parameters) == 1 ? K_ : (Pβ.parameters[2])::Int
     defs_quote = quote
         $M = size(Y,1)
         $PY = $(Y <: Array ? M : :(stride(Y,2)))
         $PX = $(X <: Array ? M : :(stride(X,2)))
     end
     q = if Tμ === T
-        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, Xstride = PX, βstride = (Pβ.parameters[2])::Int, βdim = Nβ, XP = K_, μdim = 0, μstride = 0)
+        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, Xstride = PX, βstride = βstride, βdim = Nβ, XP = K_, μdim = 0, μstride = 0)
     elseif Tμ <: LinearAlgebra.Adjoint{T,<:AbstractVector}
-        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, Xstride = PX, βstride = (Pβ.parameters[2])::Int, βdim = Nβ, XP = K_, μdim = 1, μstride = 1, μtransposed = true)
+        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, Xstride = PX, βstride = βstride, βdim = Nβ, XP = K_, μdim = 1, μstride = 1, μtransposed = true)
     elseif Tμ <: AbstractMutableFixedSizeVector
-        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, Xstride = PX, βstride = (Pβ.parameters[2])::Int, βdim = Nβ, XP = K_, μdim = 1, μstride = 1)
+        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, Xstride = PX, βstride = βstride, βdim = Nβ, XP = K_, μdim = 1, μstride = 1)
     elseif Tμ <: AbstractMutableFixedSizeMatrix
-        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, Xstride = PX, βstride = (Pβ.parameters[2])::Int, βdim = Nβ, XP = K_, μdim = 2, μstride = (Tμ.parameters[4].parameters[2])::Int)
+        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, Xstride = PX, βstride = βstride, βdim = Nβ, XP = K_, μdim = 2, μstride = (Tμ.parameters[4].parameters[2])::Int)
     elseif Tμ <: AbstractMatrix
         μstride = gensym(:μstride)
         push!(defs_quote.args, :($μstride = stride(μ,2)))
-        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, Xstride = PX, βstride = (Pβ.parameters[2])::Int, βdim = Nβ, XP = K_, μdim = 2, μstride = μstride)
+        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, Xstride = PX, βstride = βstride, βdim = Nβ, XP = K_, μdim = 2, μstride = μstride)
     else
         throw("Type of μ = $(Tμ) was not recognized.")
     end
@@ -2652,23 +2667,24 @@ end
 ) where {T,P,track,Tμ,Sβ,Nβ,Pβ}
     M, PY, PX = gensym(:M), gensym(:PY), gensym(:PX)
     K_ = Sβ.parameters[1]
+    βstride = length(Pβ.parameters) == 1 ? K_ : (Pβ.parameters[2])::Int
     defs_quote = quote
         $M = size(Y,1)
         $PY = $(Y <: Array ? M : :(stride(Y,2)))
         $PX = $(X <: Array ? M : :(stride(X,2)))
     end
     q = if Tμ === T
-        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, Xstride = PX, βstride = (Pβ.parameters[2])::Int, βdim = Nβ, XP = K_, μdim = 0, μstride = 0)
+        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, Xstride = PX, βstride = βstride, βdim = Nβ, XP = K_, μdim = 0, μstride = 0)
     elseif Tμ <: LinearAlgebra.Adjoint{T,<:AbstractVector{T}}
-        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, Xstride = PX, βstride = (Pβ.parameters[2])::Int, βdim = Nβ, XP = K_, μdim = 1, μstride = 1, μtransposed = true)
+        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, Xstride = PX, βstride = βstride, βdim = Nβ, XP = K_, μdim = 1, μstride = 1, μtransposed = true)
     elseif Tμ <: AbstractMutableFixedSizeVector
-        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, Xstride = PX, βstride = (Pβ.parameters[2])::Int, βdim = Nβ, XP = K_, μdim = 1, μstride = 1)
+        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, Xstride = PX, βstride = βstride, βdim = Nβ, XP = K_, μdim = 1, μstride = 1)
     elseif Tμ <: AbstractMutableFixedSizeMatrix
-        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, Xstride = PX, βstride = (Pβ.parameters[2])::Int, βdim = Nβ, XP = K_, μdim = 2, μstride = (Tμ.parameters[4].parameters[2])::Int)
+        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, Xstride = PX, βstride = βstride, βdim = Nβ, XP = K_, μdim = 2, μstride = (Tμ.parameters[4].parameters[2])::Int)
     elseif Tμ <: AbstractMatrix
         μstride = gensym(:μstride)
         push!(defs_quote.args, :($μstride = stride(μ,2)))
-        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, Xstride = PX, βstride = (Pβ.parameters[2])::Int, βdim = Nβ, XP = K_, μdim = 2, μstride = μstride)
+        ∂multivariate_normal_SMLT_quote(M, P, track, T, sp = true, Ystride = PY, Xstride = PX, βstride = βstride, βdim = Nβ, XP = K_, μdim = 2, μstride = μstride)
     else
         throw("Type of μ = $(Tμ) was not recognized.")
     end

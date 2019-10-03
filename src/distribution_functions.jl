@@ -31,7 +31,7 @@ function distribution_diff_rule!(mod, first_pass, second_pass, tracked_vars, out
         track_out = true
         ∂ = Symbol("###adjoint###_##∂", out, "##∂", a, "##")
         push!(function_output.args, ∂)
-        pushfirst!(second_pass.args, :( $(Symbol("###seed###", a)) = ProbabilityModels.PaddedMatrices.RESERVED_INCREMENT_SEED_RESERVED($(Symbol("###seed###", out)), $∂, $(Symbol("###seed###", a)))))
+        pushfirst!(second_pass.args, :( $(Symbol("###seed###", a)) = ProbabilityModels.RESERVED_INCREMENT_SEED_RESERVED($(Symbol("###seed###", out)), $∂, $(Symbol("###seed###", a)))))
         # pushfirst!(second_pass.args, :( $(Symbol("###seed###", a)) = $(Symbol("###seed###", out)) * $∂ ))
     end
     if track_out
@@ -42,7 +42,7 @@ function distribution_diff_rule!(mod, first_pass, second_pass, tracked_vars, out
         end
         push!(first_pass.args, :($function_output = $(mod).$(Symbol(:∂, f))($(A...), Val{$track_tup}())))
         if verbose
-            push!(first_pass.args, :(($out isa AbstractArray) ? ((length($out) < 100) && (@show $out)) : :(@show $out)))
+            push!(first_pass.args, :(($out isa AbstractArray) ? ((length($out) < 100) && (@show $out)) : @show $out))
             for a ∈ A
                 a ∈ tracked_vars && push!(first_pass.args, :(@show $(Symbol("###adjoint###_##∂", out, "##∂", a, "##"))))
             end
