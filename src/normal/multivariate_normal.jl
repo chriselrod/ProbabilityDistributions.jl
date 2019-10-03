@@ -1020,7 +1020,7 @@ function multivariate_normal_SMLT_quote(
         $(Expr(:meta,:inline)) # because of allignment bug
 #        B = Badj.parent
         $([Expr(:(=), Symbol(:δ²_,m), :(SIMDPirates.vbroadcast($V, zero($T)))) for m ∈ 0:Mk2-1]...)
-        invdiag = $(sp ? :(PtrVector{$P,$T,$P,true}(pointer(sptr,$T))) : :(MutableFixedSizeVector{$P,$T,$P}(undef)))
+        invdiag = $(sp ? :(PtrVector{$P,$T,$P,true}(pointer(sptr,$T))) : :(FixedSizeVector{$P,$T,$P}(undef)))
         $(macroexpand(LoopVectorization, quote
                       @vvectorize $T for p ∈ 1:$P
                       $loopbody
@@ -1032,7 +1032,7 @@ function multivariate_normal_SMLT_quote(
     track_L && push!(q.args, :(δ²_0 = SIMDPirates.vmul(δ²_0, SIMDPirates.vbroadcast($V,$(M isa Integer ? T(2M) : :($(T(2))*$T($M)))))))
     D >= 4 && push!(q.args, :(ptrX = pointer(X); ptrβ = pointer(β)))
     Aquote = quote
-        A = $(sp ? :(PtrMatrix{$Mk,$P,$T,$Mk}(pointer(sptr,$T) + $(VectorizationBase.align(size_T*P)))) : :(MutableFixedSizeMatrix{$Mk,$P,$T,$Mk}(undef)))
+        A = $(sp ? :(PtrMatrix{$Mk,$P,$T,$Mk}(pointer(sptr,$T) + $(VectorizationBase.align(size_T*P)))) : :(FixedSizeMatrix{$Mk,$P,$T,$Mk}(undef)))
         ptrA = pointer(A)
     end
     total_col_iterations > 1 && push!(q.args, Aquote)
@@ -1868,7 +1868,7 @@ function ∂multivariate_normal_SMLT_quote(
             push!(array_allocations.args, :(invdiag = PtrVector{$P,$T,$P}(pointer(∂L))))
         end
     elseif !sp
-        push!(array_allocations.args, :(invdiag = MutableFixedSizeVector{$P,$T,$invdiagL}(undef)))
+        push!(array_allocations.args, :(invdiag = FixedSizeVector{$P,$T,$invdiagL}(undef)))
     end
     row_increments = quote
         ptrY += $(size_T*Mk)
@@ -2054,7 +2054,7 @@ function ∂multivariate_normal_SMLT_quote(
         # Nor do we have to worry about keeping the stack (REGISTER_SIZE)-bytes alligned
         if !(track_Y || track_μ || track_X || track_β)# don't need to track A
             Aquote = quote
-                A = MutableFixedSizeMatrix{$Mk,$P}(undef)
+                A = FixedSizeMatrix{$Mk,$P}(undef)
                 ptrA = pointer(A)
             end
             Astride = Mk
@@ -2062,19 +2062,19 @@ function ∂multivariate_normal_SMLT_quote(
             if (μdim == 1) && !(track_Y || track_X || track_β) # We do not track or store all of A, so we make it a MK x P block to hold a single set of iterations across columns
                 if μtransposed
                     Aquote = quote
-                        ∂μ = MutableFixedSizeVector{$P,$T}(undef)
-                        v∂μ = MutableFixedSizeMatrix{$W,$P,$T,$W,$(W*P)}(undef) # accmulate in v∂μ; reduce at end
+                        ∂μ = FixedSizeVector{$P,$T}(undef)
+                        v∂μ = FixedSizeMatrix{$W,$P,$T,$W,$(W*P)}(undef) # accmulate in v∂μ; reduce at end
                     end
                     sptroff = W*P*size_T # aligned because of W
                 else
                     Aquote = if M isa Integer
-                        quote ∂μ = MutableFixedSizeVector{$M,$T}(undef) end
+                        quote ∂μ = FixedSizeVector{$M,$T}(undef) end
                     else
                         quote ∂μ = Vector{$T}(undef, $M) end
                     end
                 end
                 push!(Aquote.args, :(ptr∂μ = pointer(∂μ)))
-                push!(Aquote.args, :(A = MutableFixedSizeMatrix{$Mk,$P,$T,$Mk}(undef); ptrA = pointer(A)))
+                push!(Aquote.args, :(A = FixedSizeMatrix{$Mk,$P,$T,$Mk}(undef); ptrA = pointer(A)))
                 Astride = Mk
                 sptroff += VectorizationBase.align(size_T*Mk*P)
             else# We do create a full-sized (size(A) == size(Y)) A-matrix
@@ -2083,30 +2083,30 @@ function ∂multivariate_normal_SMLT_quote(
                 push!(row_increments.args, :(ptrA += $(size_T*Mk)))
                 push!(row_increments_rem.args, :(ptrA += $(size_T*W)))
                 Aquote = quote end
-                push!(Aquote.args, M isa Integer ? :(A = MutableFixedSizeMatrix{$M,$P,$T,$Astride}(undef)) : :(A = Matrix{$T}(undef, $M,$P)) )
+                push!(Aquote.args, M isa Integer ? :(A = FixedSizeMatrix{$M,$P,$T,$Astride}(undef)) : :(A = Matrix{$T}(undef, $M,$P)) )
                 push!(Aquote.args, :(ptrA = pointer(A)))
                 #end
                 if track_X              
-                    push!(Aquote.args, M isa Integer ? :(∂X = MutableFixedSizeMatrix{$M,$XP,$T,$Astride}(undef)) : :(∂X = Matrix{$T}(undef, $M,$XP))  )
+                    push!(Aquote.args, M isa Integer ? :(∂X = FixedSizeMatrix{$M,$XP,$T,$Astride}(undef)) : :(∂X = Matrix{$T}(undef, $M,$XP))  )
                     push!(Aquote.args, :(ptr∂X = pointer(∂X)))
                 end
                 if track_μ
                     if μdim == 1
                         if μtransposed
                             PL = VectorizationBase.align(P, W) # align the number of columns to SIMD width
-                            push!(Aquote.args, :(∂μ = MutableFixedSizeVector{$P,$T}(undef)))
-                            push!(Aquote.args, :(v∂μ = MutableFixedSizeMatrix{$W,$P,$T,$W,$(W*P)}(undef))) # accmulate in v∂μ; reduce at end
+                            push!(Aquote.args, :(∂μ = FixedSizeVector{$P,$T}(undef)))
+                            push!(Aquote.args, :(v∂μ = FixedSizeMatrix{$W,$P,$T,$W,$(W*P)}(undef))) # accmulate in v∂μ; reduce at end
                             push!(Aquote.args, :(ptrv∂μ = pointer(v∂μ)))
                         else#if !μtransposed
                             if M isa Integer
-                                push!(Aquote.args, :(∂μ = MutableFixedSizeVector{$M,$T,$Astride}(undef)))
+                                push!(Aquote.args, :(∂μ = FixedSizeVector{$M,$T,$Astride}(undef)))
                             else#if M isa Symbol
                                 push!(Aquote.args, :(∂μ = Vector{$T}(undef, $M)))
                             end
                         end
                     elseif track_Y# && μdim == 2
                         if M isa Integer # Y
-                            push!(Aquote.args, :(∂μ = MutableFixedSizeMatrix{$M,$P,$T,$Astride}(undef)))
+                            push!(Aquote.args, :(∂μ = FixedSizeMatrix{$M,$P,$T,$Astride}(undef)))
                         else#if !(M isa Symbol)
                             push!(Aquote.args, :(∂μ = Matrix{$T}(undef, $M,$P)))
                         end
@@ -2118,9 +2118,9 @@ function ∂multivariate_normal_SMLT_quote(
                     push!(Aquote.args, :(ptr∂μ = pointer(∂μ)))
                 end
                 if track_β # we vbroadcast from β rather than load, so no point alligning columns
-                    push!(Aquote.args, :(∂β = MutableFixedSizeMatrix{$XP,$P,$T}(undef)))
+                    push!(Aquote.args, :(∂β = FixedSizeMatrix{$XP,$P,$T}(undef)))
                     if βdim == 1
-                        push!(Aquote.args, Expr(:(=), :∂βv, :(MutableFixedSizeVector{$XP,$T}(undef))))
+                        push!(Aquote.args, Expr(:(=), :∂βv, :(FixedSizeVector{$XP,$T}(undef))))
                     end
                 end
             end

@@ -388,7 +388,7 @@ end
         quote
 #            out = zero($T)
             target = vbroadcast(Vec{$(VectorizationBase.pick_vector_width(N-1,T)),$T}, zero($T))
-            ∂L = MutableFixedSizeVector{$N,$T}(undef)
+            ∂L = FixedSizeVector{$N,$T}(undef)
             @inbounds ∂L[1] = 0
             ∂η = zero($T)
             @vvectorize $T for n ∈ 1:$(N-1)
@@ -405,7 +405,7 @@ end
         quote
             target = vbroadcast(SVec{$(VectorizationBase.pick_vector_width(N-1,T)),$T}, zero($T))
 #            out = zero($T)
-            ∂L = MutableFixedSizeVector{$N,$T}(undef)
+            ∂L = FixedSizeVector{$N,$T}(undef)
             @inbounds ∂L[1] = 0
             ∂η = zero($T)
             @vectorize $T for n ∈ 1:$(N-1)
@@ -575,7 +575,7 @@ function gamma_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_�
                 if sp
                     push!(pre_quote.args, :((sp,∂y) = PaddedMatrices.PtrVector{$M,$T}(sp)))
                 else
-                    push!(pre_quote.args, :(∂y = PaddedMatrices.MutableFixedSizeVector{$M,$T}(undef)))
+                    push!(pre_quote.args, :(∂y = PaddedMatrices.FixedSizeVector{$M,$T}(undef)))
                 end
                 push!(return_expr.args, :(∂y'))
                 # push!(return_expr.args, :(PaddedMatrices.ConstantFixedSizeVector(∂y)'))
@@ -597,7 +597,7 @@ function gamma_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_�
                 if sp
                     push!(pre_quote.args, :(∂α = PaddedMatrices.PtrVector{$M,$T}(sp)))
                 else
-                    push!(pre_quote.args, :(∂α = PaddedMatrices.MutableFixedSizeVector{$M,$T}(undef)))
+                    push!(pre_quote.args, :(∂α = PaddedMatrices.FixedSizeVector{$M,$T}(undef)))
                 end
                 push!(return_expr.args, :(∂α'))
 #                push!(return_expr.args, :(PaddedMatrices.ConstantFixedSizeVector(∂α)'))
@@ -619,7 +619,7 @@ function gamma_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_�
                 if sp
                     push!(pre_quote.args, :(∂β = PaddedMatrices.PtrVector{$M,$T}(sp)))
                 else
-                    push!(pre_quote.args, :(∂β = PaddedMatrices.MutableFixedSizeVector{$M,$T}(undef)))
+                    push!(pre_quote.args, :(∂β = PaddedMatrices.FixedSizeVector{$M,$T}(undef)))
                 end
                 push!(return_expr.args, :(∂β'))
 #                push!(return_expr.args, :(PaddedMatrices.ConstantFixedSizeVector(∂β)'))
@@ -840,7 +840,7 @@ function beta_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_β
                     push!(pre_quote.args, :((sp,∂y) = PaddedMatrices.PtrVector{$M,$T}(sp)))
                     push!(return_expr.args, :(∂y'))
                 else
-                    push!(pre_quote.args, :(∂y = PaddedMatrices.MutableFixedSizeVector{$M,$T}(undef)))
+                    push!(pre_quote.args, :(∂y = PaddedMatrices.FixedSizeVector{$M,$T}(undef)))
                     push!(return_expr.args, :(PaddedMatrices.ConstantFixedSizeVector(∂y)'))
                 end
             else
@@ -863,7 +863,7 @@ function beta_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_β
                     push!(pre_quote.args, :((sp,∂α) = PaddedMatrices.PtrVector{$M,$T}(undef)))
                     push!(return_expr.args, :(∂α'))
                 else
-                    push!(pre_quote.args, :(∂α = PaddedMatrices.MutableFixedSizeVector{$M,$T}(undef)))
+                    push!(pre_quote.args, :(∂α = PaddedMatrices.FixedSizeVector{$M,$T}(undef)))
                     push!(return_expr.args, :(PaddedMatrices.ConstantFixedSizeVector(∂α)'))
                 end
             else
@@ -888,7 +888,7 @@ function beta_quote(M, T, yisvec, αisvec, βisvec, (track_y, track_α, track_β
                     push!(pre_quote.args, :((sp,∂β) = PaddedMatrices.PtrVector{$M,$T}(undef)))
                     push!(return_expr.args, :(∂β'))
                 else
-                    push!(pre_quote.args, :(∂β = PaddedMatrices.MutableFixedSizeVector{$M,$T}(undef)))
+                    push!(pre_quote.args, :(∂β = PaddedMatrices.FixedSizeVector{$M,$T}(undef)))
                     push!(return_expr.args, :(PaddedMatrices.ConstantFixedSizeVector(∂β)'))
                 end
             else
@@ -1080,7 +1080,7 @@ function lsgg_quotebeta_quote(
                 # Inlined because of Julia SIMD corruption bug (if sp)
                 # inlined to avoid heap allocation of mvector (if !sp)
                 $(Expr(:meta,:inline))
-                $(sp ? :((sp, ∂y) = PtrVector{$M,$T}(sp)) : :( ∂y = MutableFixedSizeVector{$M,$T}(undef)))
+                $(sp ? :((sp, ∂y) = PtrVector{$M,$T}(sp)) : :( ∂y = FixedSizeVector{$M,$T}(undef)))
                 target = SIMDPirates.vbroadcast(Vec{$W,$T}, zero($T))
                 LoopVectorization.@vvectorize for m ∈ 1:$M
                     $q

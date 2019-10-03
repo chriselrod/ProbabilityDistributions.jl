@@ -9,9 +9,6 @@ function univariate_normal_quote(
     if partial
         X = Vector{Int}(undef, N)
         X[1] = 1
-        # if N > 1
-        #     X[2] = P
-        # end
         for n in 2:N
             X[n] = X[n-1] * (S.parameters[n-1])::Int
         end
@@ -210,7 +207,7 @@ function univariate_normal_quote(
                     push!(pre_quote.args, :(_sptr += $(VectorizationBase.align(M*sizeof(T)))))
                     push!(return_expr.args, :(∂y'))
                 else
-                    push!(pre_quote.args, :(∂y = MutableFixedSizeArray{$S,$T,$N,$P}(undef) ))
+                    push!(pre_quote.args, :(∂y = FixedSizeArray{$S,$T,$N,$P}(undef) ))
                     push!(return_expr.args, :(ConstantFixedSizeArray(∂y)'))
                 end
             else
@@ -228,7 +225,7 @@ function univariate_normal_quote(
                     push!(pre_quote.args, :(_sptr += $(VectorizationBase.align(M*sizeof(T)))))
                     push!(return_expr.args, :(∂μ'))
                 else
-                    push!(pre_quote.args, :(∂μ = MutableFixedSizeArray{$S,$T,$N,$P}(undef) ))
+                    push!(pre_quote.args, :(∂μ = FixedSizeArray{$S,$T,$N,$P}(undef) ))
                     push!(return_expr.args, :(ConstantFixedSizeArray(∂μ)'))
                 end
             elseif μisvec == false
@@ -245,7 +242,7 @@ function univariate_normal_quote(
                     push!(pre_quote.args, :(_sptr += $(VectorizationBase.align(M*sizeof(T)))))
                     push!(return_expr.args, :(∂σ'))
                 else
-                    push!(pre_quote.args, :(∂σ = MutableFixedSizeArray{$S,$T,$N,$P}(undef) ))
+                    push!(pre_quote.args, :(∂σ = FixedSizeArray{$S,$T,$N,$P}(undef) ))
 #                push!(loop_expr.args, :(∂σ[i] = δσ⁻² * σ⁻¹ ))
                     push!(return_expr.args, :(ConstantFixedSizeArray(∂σ)'))
                 end
