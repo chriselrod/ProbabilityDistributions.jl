@@ -2002,10 +2002,10 @@ function ∂multivariate_normal_SMLT_quote(
                     end
                 end
                 if track_β # we vbroadcast from β rather than load, so no point alligning columns
-                    XPL = VectorizationBase.align(XP, T)
-                    push!(Aquote.args, :(∂β = PtrMatrix{$XP,$P,$T}(_sptr); ptr∂β = _sptr))
-                    alignβoffset = XPL*P*size_T
+                    push!(Aquote.args, :(∂β = PtrMatrix{$XP,$P,$T,$XP}(_sptr); ptr∂β = _sptr))
+                    alignβoffset = VectorizationBase.align(XP*P*size_T)
                     if βdim == 1
+                        XPL = VectorizationBase.align(XP, T)
                         push!(Aquote.args, :(_sptr += $(XPL*size_T))) # impacts the pointer we ultimately return
                         # first increment (because of if/else statements), so we could (and did) turn the += into an =
                         # gives extra offset for future allocations
@@ -2663,8 +2663,8 @@ end
     μ::Tμ,
     L::AbstractLowerTriangularMatrix{P,T},
     ::Val{track} = Val{(true,true,true,true,true)}()
-# ) where {P,T,track,Sβ,Nβ,Pβ,Tμ}
-) where {T,P,track,Tμ,Sβ,Nβ,Pβ}
+) where {P,T,track,Sβ,Nβ,Pβ,Tμ}
+# ) where {T,P,track,Tμ,Sβ,Nβ,Pβ}
     M, PY, PX = gensym(:M), gensym(:PY), gensym(:PX)
     K_ = Sβ.parameters[1]
     βstride = length(Pβ.parameters) == 1 ? K_ : (Pβ.parameters[2])::Int
