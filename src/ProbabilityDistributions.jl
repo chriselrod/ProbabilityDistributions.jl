@@ -4,16 +4,15 @@ using   SIMDPirates, SLEEFPirates, SpecialFunctions, DistributionParameters,
         PaddedMatrices, StructuredMatrices, ScatteredArrays, LinearAlgebra,
         VectorizationBase, LoopVectorization, StackPointers
 
-using PaddedMatrices: StackPointer, DynamicPtrMatrix,
+using PaddedMatrices:
+    DynamicPtrMatrix, AbstractMutableFixedSizeArray, simplify_expr,
     AbstractFixedSizeVector, AbstractFixedSizeMatrix, AbstractFixedSizeArray, AbstractPaddedMatrix,
-    AbstractMutableFixedSizeVector, AbstractMutableFixedSizeMatrix,
-    AbstractMutableFixedSizeArray, simplify_expr
+    AbstractMutableFixedSizeVector, AbstractMutableFixedSizeMatrix
+    
 using ScatteredArrays: AbstractScatteredArray
 using StructuredMatrices: AbstractAutoregressiveMatrix, AbstractLowerTriangularMatrix
 using DistributionParameters: AbstractLKJCorrCholesky, AbstractFixedSizeCovarianceMatrix
-using SIMDPirates: extract_data, vbroadcast, vadd, vsub, vfnmadd, vfmsub, vfnmsub, vsum, vload, vstore!
 using VectorizationBase: pick_vector_width, pick_vector_width_shift
-using LoopVectorization: @vvectorize
 
 function return_expression(return_expr)
     length(return_expr.args) == 1 ? return_expr.args[1] : return_expr
@@ -22,7 +21,6 @@ function return_expression(return_expr, sp::Bool, spexpr = :sp)
     expr = length(return_expr.args) == 1 ? return_expr.args[1] : return_expr
     sp ? Expr(:tuple, spexpr, expr) : expr
 end
-
 
 include("distribution_functions.jl")
 include("normal/univariate_normal.jl")
