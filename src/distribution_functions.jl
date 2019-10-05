@@ -40,7 +40,7 @@ function distribution_diff_rule!(mod, first_pass, second_pass, tracked_vars, out
             printstring = "distribution $f (ret: $out): "
             push!(first_pass.args, :(println($printstring)))
         end
-        push!(first_pass.args, :($function_output = $(mod).$(Symbol(:∂, f))($(A...), Val{$track_tup}())))
+        push!(first_pass.args, :($function_output = $(mod).ProbabilityDistributions.$(Symbol(:∂, f))($(A...), Val{$track_tup}())))
         if verbose
             push!(first_pass.args, :(($out isa AbstractArray) ? ((length($out) < 100) && (@show $out)) : @show $out))
             for a ∈ A
