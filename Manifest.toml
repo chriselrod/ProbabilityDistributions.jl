@@ -101,7 +101,7 @@ uuid = "bac558e1-5e72-5ebc-8fee-abe8a469f55d"
 version = "1.1.0"
 
 [[PaddedMatrices]]
-deps = ["LinearAlgebra", "LoopVectorization", "MacroTools", "Parameters", "Random", "SIMDPirates", "SLEEFPirates", "StackPointers", "VectorizationBase", "VectorizedRNG"]
+deps = ["LinearAlgebra", "LoopVectorization", "MacroTools", "Parameters", "Random", "ReverseDiffExpressionsBase", "SIMDPirates", "SLEEFPirates", "StackPointers", "VectorizationBase", "VectorizedRNG"]
 path = "/home/chriselrod/.julia/dev/PaddedMatrices"
 uuid = "1f4db776-fdbc-11e8-06f3-e1707b8b4170"
 version = "0.1.0"
@@ -129,6 +129,7 @@ deps = ["Serialization"]
 uuid = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 
 [[ReverseDiffExpressionsBase]]
+deps = ["SIMDPirates", "StackPointers", "VectorizationBase"]
 path = "/home/chriselrod/.julia/dev/ReverseDiffExpressionsBase"
 uuid = "6c4e8705-acc8-45e6-99c7-2e34d4f10b96"
 version = "0.1.0"

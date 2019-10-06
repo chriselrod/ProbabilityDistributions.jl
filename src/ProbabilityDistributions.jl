@@ -2,7 +2,7 @@ module ProbabilityDistributions
 
 using   SIMDPirates, SLEEFPirates, SpecialFunctions, DistributionParameters,
         PaddedMatrices, StructuredMatrices, ScatteredArrays, LinearAlgebra,
-        VectorizationBase, LoopVectorization, StackPointers
+        VectorizationBase, LoopVectorization, StackPointers, Parameters
 
 using PaddedMatrices:
     DynamicPtrMatrix, AbstractMutableFixedSizeArray, simplify_expr,
