@@ -1219,7 +1219,7 @@ normal_lpdf(y, μ, nhτ, nlogrootτ) = nhτ * abs2(y-μ) - nlogrootτ
         col_lengths = Treatments.column_lengths
         vτ = SIMDPirates.vbroadcast(Vec{$W,$T}, τ)
         vnh = SIMDPirates.vbroadcast(Vec{$W,$T}, $(T(-0.5)))
-        $([:($(Symbol(:vτma_,k)) = vmul(vτ, $(Expr(:tuple, [Core.VecElement{T}(2m/(m+1)) for m in k*W+1:k*W+padM]...)))) for k in 0:((padM>>>Wshift)-1)]...)
+        $([:($(Symbol(:vτma_,k)) = vmul(vτ, $(Expr(:tuple, [Core.VecElement{T}(2m/(m+1)) for m in k*W+1:(k+1)*W]...)))) for k in 0:((padM>>>Wshift)-1)]...)
         $([:($(Symbol(:vnhτ_,k)) = vmul(vnh, $(Symbol(:vτma_,k)))) for k in 0:((padM>>>Wshift)-1)]...)
         $([:($(Symbol(:vnlogrootτ_,k)) = vmul(vnh, SLEEFPirates.log($(Symbol(:vτma_,k))))) for k in 0:((padM>>>Wshift)-1)]...)
         @inbounds nhτ = $(Expr(:tuple, [:(($(Symbol(:vnhτ_,m>>>Wshift))[$(1+m&(W-1))]).value) for m in 0:padM-1]...))
@@ -1334,7 +1334,7 @@ end
         dταr = zero($T)
         vτ = SIMDPirates.vbroadcast(Vec{$W,$T}, τ)
         vnh = SIMDPirates.vbroadcast(Vec{$W,$T}, $(T(-0.5)))
-        $([:($(Symbol(:vτma_,k)) = vmul(vτ, $(Expr(:tuple, [Core.VecElement{T}(2m/(m+1)) for m in k*W+1:k*W+padM]...)))) for k in 0:((padM>>>Wshift)-1)]...)
+        $([:($(Symbol(:vτma_,k)) = vmul(vτ, $(Expr(:tuple, [Core.VecElement{T}(2m/(m+1)) for m in k*W+1:(k+1)*W]...)))) for k in 0:((padM>>>Wshift)-1)]...)
         $([:($(Symbol(:vnhτ_,k)) = vmul(vnh, $(Symbol(:vτma_,k)))) for k in 0:((padM>>>Wshift)-1)]...)
         $([:($(Symbol(:vnhσ²_,k)) = SIMDPirates.vfdiv(vnh,$(Symbol(:vτma_,k)))) for k in 0:((padM>>>Wshift)-1)]...)
         $([:($(Symbol(:vnlogrootτ_,k)) = vmul(vnh, SLEEFPirates.log($(Symbol(:vτma_,k))))) for k in 0:((padM>>>Wshift)-1)]...)
