@@ -1814,7 +1814,7 @@ end
     row_iter
 end
 
-@noinline function allocate_fullsize_A_stackpointer!(row_increments, row_increments_rem, sptroffexpr, sptroff, config::NormalCholeskyConfiguration{T}, W, Mk, Nk, invdiagL) where {T}
+@noinline function allocate_fullsize_A_stackpointer!(row_increments, row_increments_rem, sptroff, config::NormalCholeskyConfiguration{T}, W, Mk, Nk, invdiagL) where {T}
     @unpack M, P, track_Y, track_X, track_β, track_μ, track_L, βstride, Xstride, Ystride, μstride, μdim, sp, βdim, XP, μtransposed, arity = config
     size_T = sizeof(T)
     Astride = M isa Integer ? VectorizationBase.align(M, W) : :_A_stride_
@@ -1912,6 +1912,7 @@ end
             else#if sptroff != 0
                 push!(Aquote.args, :(A = PtrMatrix{$M,$P,$T,$Astride}(_sptr + $sptroff) ))
             end
+            sptroffexpr = quote end
             sptroff += Astride*P*size_T
         else#if M isnot an Integer
             if sptroff == 0
@@ -1923,15 +1924,16 @@ end
             nonempty_sptroff_expr = true
         end
         push!(Aquote.args, sptroff == 0 ? :(ptrA = _sptr) : :(ptrA = pointer(A)))
+    else
+        sptroffexpr = quote end        
     end
-    Aquote, Astride, sptroff
+    Aquote, Astride, sptroff, sptroffexpr, nonempty_sptroff_expr
 end
 
 @noinline function allocate_partials_stackpointer!(row_increments, row_increments_rem, config::NormalCholeskyConfiguration{T}, W, Mk, Nk, invdiagL, ∂LL) where {T}
     @unpack M, P, track_Y, track_X, track_β, track_μ, track_L, βstride, Xstride, Ystride, μstride, μdim, sp, βdim, XP, μtransposed, arity = config
     sptroff = 0
     size_T = sizeof(T)
-    sptroffexpr = quote end
     nonempty_sptroff_expr = false
     if !(track_Y || track_μ || track_X || track_β)# don't need to track A
         Aquote = quote
@@ -1940,6 +1942,7 @@ end
         end
         sptroff = VectorizationBase.align(Mk*P*size_T)
         Astride = Mk
+        sptroffexpr = quote end
     else # We track at least one of the four
         if (μdim == 1) && !(track_Y || track_X || track_β) # We do not track or store all of A, so we make it a MK x P block to hold a single set of iterations across columns
             if μtransposed
@@ -1971,8 +1974,9 @@ end
             push!(Aquote.args, :(A = PtrMatrix{$Mk,$P,$T,$Mk}(_sptr + $sptroff); ptrA = pointer(A)))
             Astride = Mk
             sptroff += VectorizationBase.align(size_T*Mk*P)
+            sptroffexpr = quote end
         else# We do create a full-sized (size(A) == size(Y)) A-matrix
-            Aquote, Astride, sptroff = allocate_fullsize_A_stackpointer!(row_increments, row_increments_rem, sptroffexpr, sptroff, config, W, Mk, Nk, invdiagL)
+            Aquote, Astride, sptroff, sptroffexpr, nonempty_sptroff_expr = allocate_fullsize_A_stackpointer!(row_increments, row_increments_rem, sptroff, config, W, Mk, Nk, invdiagL)
         end
     end
     final_offset_expr = if nonempty_sptroff_expr
@@ -2080,7 +2084,7 @@ end
         if sp
             push!(array_allocations.args, :(∂L = StructuredMatrices.PtrLowerTriangularMatrix{$P,$T,$∂LL}(_sptr)))
             push!(array_allocations.args, :(invdiag = PtrVector{$P,$T,$P}(_sptr)))
-            push!(array_allocations.args, :(_sptr += $(∂LL*size_T)))
+            push!(array_allocations.args, :(_sptr += $(VectorizationBase.align(∂LL*size_T))))
         else
             push!(array_allocations.args, :(v∂L = StructuredMatrices.MutableLowerTriangularMatrix{$P,Vec{$W,$T},$∂LL}(undef)))
             push!(array_allocations.args, :(∂L = StructuredMatrices.MutableLowerTriangularMatrix{$P,$T,$∂LL}(undef)))
