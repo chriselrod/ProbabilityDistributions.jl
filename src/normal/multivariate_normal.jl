@@ -1116,10 +1116,12 @@ end
                 $row_iter_onevec
                 $loop_increments_onevec
             end
-            ptrUdiag = pointer(invdiag); ptrUtri = ptrUtribase
             row_rem_final = Mkrem & $Wm1
-            __mask__ = VectorizationBase.mask($T, row_rem_final)
-            $row_iter_onevecmask
+            if row_rem_final != 0
+                ptrUdiag = pointer(invdiag); ptrUtri = ptrUtribase
+                __mask__ = VectorizationBase.mask($T, row_rem_final)
+                $row_iter_onevecmask
+            end
         end
         push!(q.args, row_loops)
     end
@@ -1814,7 +1816,9 @@ end
     row_iter
 end
 
-@noinline function allocate_fullsize_A_stackpointer!(row_increments, row_increments_rem, sptroff, config::NormalCholeskyConfiguration{T}, W, Mk, Nk, invdiagL) where {T}
+@noinline function allocate_fullsize_A_stackpointer!(
+    row_increments, row_increments_rem, sptroff, config::NormalCholeskyConfiguration{T}, W, Mk, Nk, invdiagL
+) where {T}
     @unpack M, P, track_Y, track_X, track_β, track_μ, track_L, βstride, Xstride, Ystride, μstride, μdim, sp, βdim, XP, μtransposed, arity = config
     size_T = sizeof(T)
     Astride = M isa Integer ? VectorizationBase.align(M, W) : :_A_stride_
@@ -1905,6 +1909,7 @@ end
         end
     end
     delay_alloc && push!(Aquote.args, delayed_allocation_quote)
+    nonempty_sptroff_expr = false
     if must_still_allocate_A
         if M isa Integer
             if sptroff == 0
@@ -1991,7 +1996,9 @@ end
     end        
     Aquote, Astride
 end
-function allocate_partials_no_stackpointer!(row_increments, row_increments_rem, config::NormalCholeskyConfiguration{T}, W, Mk, Nk, invdiagL) where {T}
+function allocate_partials_no_stackpointer!(
+    row_increments, row_increments_rem, config::NormalCholeskyConfiguration{T}, W, Mk, Nk, invdiagL
+) where {T}
     @unpack M, P, track_Y, track_X, track_β, track_μ, track_L, βstride, Xstride, Ystride, μstride, μdim, sp, βdim,  XP, μtransposed, arity = config
     # Life is easier if we don't use our own stack, because
     # now we don't have to bother sorting the parameters on said stack ourselves.
@@ -2028,11 +2035,16 @@ function allocate_partials_no_stackpointer!(row_increments, row_increments_rem, 
             push!(row_increments.args, :(ptrA += $(size_T*Mk)))
             push!(row_increments_rem.args, :(ptrA += $(size_T*W)))
             Aquote = quote end
-            push!(Aquote.args, M isa Integer ? :(A = FixedSizeMatrix{$M,$P,$T,$Astride}(undef)) : :(A = Matrix{$T}(undef, $M,$P)) )
+            Aexpr = M isa Integer ? :(FixedSizeMatrix{$M,$P,$T,$Astride}(undef)) :  :(Matrix{$T}(undef, $M, $P))
+            push!(Aquote.args, :(A = $Aexpr))
             push!(Aquote.args, :(ptrA = pointer(A)))
             #end
-            if track_X              
-                push!(Aquote.args, M isa Integer ? :(∂X = FixedSizeMatrix{$M,$XP,$T,$Astride}(undef)) : :(∂X = Matrix{$T}(undef, $M,$XP))  )
+            if track_X
+                if M isa Integer
+                    push!(Aquote.args, :(∂X = FixedSizeMatrix{$M,$XP,$T,$Astride}(undef)))
+                else
+                    push!(Aquote.args, :(∂X = Matrix{$T}(undef, $M,$XP))  )
+                end
                 push!(Aquote.args, :(ptr∂X = pointer(∂X)))
             end
             if track_μ
@@ -2053,7 +2065,7 @@ function allocate_partials_no_stackpointer!(row_increments, row_increments_rem, 
                     if M isa Integer # Y
                         push!(Aquote.args, :(∂μ = FixedSizeMatrix{$M,$P,$T,$Astride}(undef)))
                     else#if !(M isa Symbol)
-                        push!(Aquote.args, :(∂μ = Matrix{$T}(undef, $M,$P)))
+                        push!(Aquote.args, :(∂μ = Matrix{$T}(undef,$M,$P)))
                     end
                 end
                 if ((μdim == 1) && !μtransposed) || ((μdim == 2) && track_Y)
@@ -2163,6 +2175,8 @@ end
         ptrLtribase = pointer(L) + $size_T * $(P + StructuredMatrices.binomial2(startoffset) + startoffset * (P - startoffset)) # diag + triangle + subtriangle
         ptrLdiagbase = pointer(invdiag) + $(size_T * startoffset)
     end
+    # Workaround for Vec alignment issue
+    # If M isa Symbol, the inline will be added by the func calling this one.
     M isa Integer && pushfirst!(q.args, Expr(:meta, :inline))
     if track_L
         push!(q.args, :(δ²_0 = SIMDPirates.vmul(δ²_0, SIMDPirates.vbroadcast($V,$(M isa Integer ? T(2M) : :($(T(2))*$T($M)))))))
@@ -2231,19 +2245,27 @@ end
         end
         if row_rem > 0 && n_row_reps > 0
             push!(q.args, :(ptrUdiag = pointer(invdiag); ptrUtri = ptrUtribase))
-            push!(q.args, ∂mutlivariate_normal_SMLT_rowiter( row_rem, Nk, col_rem, T, Ystride, n_col_reps, μdim, μstride, track, μmy, :ptrμ, Astride, XP, βstride, Xstride, βdim, μtransposed ))
+            push!(q.args,
+                  ∂mutlivariate_normal_SMLT_rowiter(
+                      row_rem, Nk, col_rem, T, Ystride, n_col_reps, μdim, μstride,
+                      track, μmy, :ptrμ, Astride, XP, βstride, Xstride, βdim, μtransposed
+                  )
+            )
         end
     else # Unknown number of iterations.
         row_iter = ∂mutlivariate_normal_SMLT_rowiter(
-            Mk, Nk, col_rem, T, Ystride, n_col_reps, μdim, μstride, track, μmy, :ptrμ, Astride, XP, βstride, Xstride, βdim, μtransposed
+            Mk, Nk, col_rem, T, Ystride, n_col_reps, μdim, μstride, track, μmy,
+            :ptrμ, Astride, XP, βstride, Xstride, βdim, μtransposed
         )
         Wrem, Mkrem, Nkrem = StructuredMatrices.div_triangle_blocking_structure(W, P, T)
         n_col_repsrem, col_remrem = divrem(P, Nkrem)
         row_iter_onevec = ∂mutlivariate_normal_SMLT_rowiter(
-            W, Nkrem, col_remrem, T, Ystride, n_col_repsrem, μdim, μstride, track, μmy, :ptrμ, Astride, XP, βstride, Xstride, βdim, μtransposed
+            W, Nkrem, col_remrem, T, Ystride, n_col_repsrem, μdim, μstride, track, μmy,
+            :ptrμ, Astride, XP, βstride, Xstride, βdim, μtransposed
         )
         row_iter_onevecmask = ∂mutlivariate_normal_SMLT_rowiter(
-            :row_rem_final, Nkrem, col_remrem, T, Ystride, n_col_repsrem, μdim, μstride, track, μmy, :ptrμ, Astride, XP, βstride, Xstride, βdim, μtransposed
+            :row_rem_final, Nkrem, col_remrem, T, Ystride, n_col_repsrem, μdim, μstride, track, μmy,
+            :ptrμ, Astride, XP, βstride, Xstride, βdim, μtransposed
         )
         row_loops = quote
             Mkrep, Mkrem = divrem($M, $Mk)
@@ -2258,9 +2280,11 @@ end
                 $row_increments_rem
             end
             row_rem_final = Mkrem & $Wm1
-            ptrUdiag = pointer(invdiag); ptrUtri = ptrUtribase
-            __mask__ = VectorizationBase.mask($T, row_rem_final)
-            $row_iter_onevecmask
+            if row_rem_final != 0
+                ptrUdiag = pointer(invdiag); ptrUtri = ptrUtribase
+                __mask__ = VectorizationBase.mask($T, row_rem_final)
+                $row_iter_onevecmask
+            end
         end
         push!(q.args, row_loops)
     end
@@ -2282,12 +2306,20 @@ end
         loopheader = quote ptrv∂L = pointer(v∂L); ptr∂L = pointer(∂L) end
         loop1body = quote
             VectorizationBase.store!(
-                    ptr∂L + p*$size_T, Base.FastMath.sub_fast(SIMDPirates.vsum(SIMDPirates.vload($V, ptrv∂L + p*$(W*size_T))), Base.FastMath.mul_fast($(M isa Symbol ? :($T($M)) : T(M)), VectorizationBase.load(ptr∂L + p*$size_T)))
+                ptr∂L + p*$size_T,
+                Base.FastMath.sub_fast(
+                    SIMDPirates.vsum(SIMDPirates.vload($V, ptrv∂L + p*$(W*size_T))),
+                    Base.FastMath.mul_fast(
+                        $(M isa Symbol ? :($T($M)) : T(M)),
+                        VectorizationBase.load(ptr∂L + p*$size_T))
                 )
+            )
         end
         if track_μ && μdim == 1 && μtransposed
             push!(loopheader.args, :(ptr∂μ = pointer(∂μ); ptrv∂μ = pointer(v∂μ)))
-            push!(loop1body.args, :(VectorizationBase.store!( ptr∂μ + p*$size_T, SIMDPirates.vsum(SIMDPirates.vload($V, ptrv∂μ + p*$(W*size_T))))))
+            push!(loop1body.args, :(VectorizationBase.store!(
+                ptr∂μ + p*$size_T, SIMDPirates.vsum(SIMDPirates.vload($V, ptrv∂μ + p*$(W*size_T)))
+            )))
         end
         vsum_L_expr = quote
             $loopheader    
