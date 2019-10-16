@@ -161,7 +161,7 @@ function ∂Bernoulli_logit(sptr::StackPointer, y::BitVector, α::AbstractVector
 end
 push!(DISTRIBUTION_DIFF_RULES, :Bernoulli_logit)
 
-function Binomial_logit_quote(T)
+function Binomial_logit_quote(T, yconst::Bool = false)
     W = VectorizationBase.pick_vector_width(T)
     q = quote
         # $(Expr(:meta, :inline))
@@ -170,7 +170,7 @@ function Binomial_logit_quote(T)
             αᵢ = α[i]
             invOmP = one($T) + SLEEFPirates.exp( αᵢ )
             nlogOmP = log(invOmP)
-            target = vsub(target, N[i] * nlogOmP - s[i] * αᵢ)
+            target = vsub(target, $(yconst ? :N : :(N[i])) * nlogOmP - s[i] * αᵢ)
         end
         target
     end
@@ -186,7 +186,16 @@ end
     Binomial_logit_quote(T)
 end
 
-function ∂Binomial_logit_quote(T)
+@generated function Binomial_logit(
+    s::AbstractVector{T}, α::AbstractVector{T}, N::T,
+    ::Val{track} = Val{(false,true,false)}()
+) where {track, T}
+    s_is_param, α_is_param, N_is_param = track
+    @assert !s_is_param && !N_is_param
+    Binomial_logit_quote(T, true)
+end
+
+function ∂Binomial_logit_quote(T, yconst::Bool = false)
     W = VectorizationBase.pick_vector_width(T)
     q = quote
         # $(Expr(:meta, :inline))
@@ -197,7 +206,7 @@ function ∂Binomial_logit_quote(T)
             invOmP = ( one($T) + expαᵢ )
             ∂logP = one($T) / invOmP
             nlogOmP = SLEEFPirates.log(invOmP)
-            sᵢ = s[i]; Nᵢ = N[i]
+            $(yconst ? :(sᵢ = s[i]) : :(sᵢ = s[i]; Nᵢ = N[i]))
             target = vsub(target, Nᵢ * nlogOmP - sᵢ * αᵢ )
             ∂α[i] = sᵢ - Nᵢ * ∂logP * expαᵢ
         end
@@ -214,8 +223,19 @@ end
     # α_is_param ? ∂Bernoulli_logit_quote(T) : Bernoulli_logit_quote(T)
     ∂Binomial_logit_quote(T)
 end
+@generated function ∂Binomial_logit!(
+    ∂α::AbstractVector{T}, s::AbstractVector{T}, α::AbstractVector{T}, Nᵢ::T
+) where {T}
+    # y_is_param, α_is_param = track
+    # @assert y_is_param == false
+    # α_is_param ? ∂Bernoulli_logit_quote(T) : Bernoulli_logit_quote(T)
+    ∂Binomial_logit_quote(T, true)
+end
 
-function ∂Binomial_logit(s::AbstractVector{T}, α::AbstractVector{T}, N::AbstractVector{T}, ::Val{track} = Val{(false,true,false)}()) where {T,track}
+function ∂Binomial_logit(
+    s::AbstractVector{T}, α::AbstractVector{T}, N::Union{T,AbstractVector{T}},
+    ::Val{track} = Val{(false,true,false)}()
+) where {T,track}
     s_is_param, α_is_param, N_is_param = track
     @assert !s_is_param && !N_is_param
     if α_is_param
@@ -225,7 +245,10 @@ function ∂Binomial_logit(s::AbstractVector{T}, α::AbstractVector{T}, N::Abstr
         return Binomial_logit(s, α, N)
     end
 end
-function ∂Binomial_logit(sptr::StackPointer, s::AbstractVector{T}, α::AbstractVector{T}, N::AbstractVector{T}, ::Val{track} = Val{(false,true,false)}()) where {T,track}
+function ∂Binomial_logit(
+    sptr::StackPointer, s::AbstractVector{T}, α::AbstractVector{T}, N::Union{T,AbstractVector{T}},
+    ::Val{track} = Val{(false,true,false)}()
+) where {T,track}
     s_is_param, α_is_param, N_is_param = track
     @assert !s_is_param && !N_is_param
     if α_is_param
