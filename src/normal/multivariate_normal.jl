@@ -366,7 +366,7 @@ end
     Wm1 = W - 1
     Riter = R >>> Wshift
     Rrem = R & Wm1
-    mask = VectorizationBase.mask_from_remainder(T, Rrem)
+    mask = VectorizationBase.mask(T, Rrem)
     # if K isa Symbol
     q = quote
         BsymK = $Bsym + $(size_T)*$K*$Bstride
@@ -587,7 +587,7 @@ end
     Rrem = R & Wm1
     Riterl = Rrem > 0 ? Riter : Riter - 1
     maskload = maskload & (Rrem > 0)
-    mask = VectorizationBase.mask_from_remainder(T, Rrem)
+    mask = VectorizationBase.mask(T, Rrem)
     # if K isa Symbol
     q = quote
         YsymK = $ysym + $size_T*$Ystride*$K
@@ -855,7 +855,7 @@ end
     Rrem = R & Wm1
     Riterl = Rrem > 0 ? Riter : Riter - 1
     maskload = maskload & (Rrem > 0)
-    mask = VectorizationBase.mask_from_remainder(T, Rrem)
+    mask = VectorizationBase.mask(T, Rrem)
     q = quote end
     # Initial load
     push!(q.args, Expr(:(=), :vβ, :(SIMDPirates.vbroadcast($V, $βsym))))
@@ -1495,7 +1495,7 @@ end
     Riter = Mk >>> Wshift
     Rrem = Mk & (W-1)
     Riterl = Rrem > 0 ? Riter : Riter-1
-    mask = VectorizationBase.mask_from_remainder(T, Rrem)
+    mask = VectorizationBase.mask(T, Rrem)
     row_iter = quote end
     f = μmy ? :vsub : :vadd
     if μdim == 0
