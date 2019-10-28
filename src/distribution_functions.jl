@@ -409,11 +409,11 @@ end
     track_η = Pη !== Nothing
     if track_L
         L_uninit = !isinitialized(PL)
-        ∂Lop = L_uninit ? :(+) : :(+=)
+        ∂Lop = L_uninit ? :(=) : :(+=)
     end
     if track_η
         η_uninit = !isinitialized(Pη)
-        ∂ηop = η_uninit ? :(+) : :(+=)
+        ∂ηop = η_uninit ? :(=) : :(+=)
     end
     if track_L && track_η
         q = quote
@@ -1254,7 +1254,7 @@ end
         ϕ <: AbstractArray,
         δ <: AbstractArray,
         σ <: AbstractArray),
-        track, true, false
+        track, false
     )
 end
 @generated function ∂lsgg(sp::StackPointer, y::AbstractFixedSizeVector{M,T}, α, ϕ, δ, σ, ::Val{track}) where {M,T,track}
@@ -1264,7 +1264,7 @@ end
         ϕ <: AbstractArray,
         δ <: AbstractArray,
         σ <: AbstractArray),
-        track, true, true
+        track, true
     )
 end
 @generated function lsgg(y::T, α, ϕ, δ, σ, ::Val{track}) where {T<:Real,track}
@@ -1424,6 +1424,113 @@ function ∂normal_lpdf(y, μ, nhτ, nlogrootτ, nhσ²)
     f, ∂f∂y, ∂f∂μ, ∂f∂τ
 end
 
+@generated function ∂EₘₐₓNMA!(
+    dαv::∂ΑN, ∂σᵤ::∂ΣμN, demaxv::DEMAX, ded50v::DED50, ∂σ::∂ΣN,
+    α::AbstractVector{T}, σᵤ::T, Eₘₐₓ::AbstractFixedSizeVector{C,T}, ED₅₀::AbstractFixedSizeVector{C,T}, σ::T,
+    treatments::StructuredMatrices.FixedSizeRaggedMatrix{M,N,P,<:Integer,<:Integer}, dose::AbstractVector{T}
+) where {T,C,M,N,P,∂ΑN, ∂ΣμN, DEMAX, DED50, ∂ΣN}
+    padM = PaddedMatrices.calc_padding(M-1, T)
+    W, Wshift = VectorizationBase.pick_vector_width_shift(M-1)
+    inits_q = quote target = zero($T) end
+    if !isinitialized(DEMAX) || !isinitialized(DED50)
+        loop_body = quote end
+        isinitialized(DEMAX) || push!(loop_body.args, :(demaxv[i] = zero($T)))
+        isinitialized(DED50) || push!(loop_body.args, :(ded50v[i] = zero($T)))
+        loop_q = quote
+            @inbounds for i ∈ eachindex(demaxv)
+                $loop_body
+            end
+        end
+        push!(inits_q.args, loop_q)
+    end
+    quote
+        dsdemax = PtrMatrix{2,$M,$T}(SIMDPirates.alloca(Val{$(2M)}(), $T))
+        $inits_q
+        invσ = 1/σ
+        # σ² =  σ * σ
+        τ = abs2(invσ)
+        dτdσ = -2τ*invσ
+        # @show dτdσ
+        # tau, dtaudsigma = 1/abs2(sigma), -2/sigma^3
+        j = 1
+        dτ = zero(σ)
+        col_lengths = treatments.column_lengths
+        ταr = 1 / σᵤ
+        ταr² = ταr * ταr
+        dταrdσᵤ = -ταr * ταr
+        dταr = zero($T)
+        vτ = SIMDPirates.vbroadcast(Vec{$W,$T}, τ)
+        vnh = SIMDPirates.vbroadcast(Vec{$W,$T}, $(T(-0.5)))
+        $([:($(Symbol(:vτma_,k)) = vmul(vτ, $(Expr(:tuple, [Core.VecElement{T}(2m/(m+1)) for m in k*W+1:(k+1)*W]...)))) for k in 0:((padM>>>Wshift)-1)]...)
+        $([:($(Symbol(:vnhτ_,k)) = vmul(vnh, $(Symbol(:vτma_,k)))) for k in 0:((padM>>>Wshift)-1)]...)
+        $([:($(Symbol(:vnhσ²_,k)) = SIMDPirates.vfdiv(vnh,$(Symbol(:vτma_,k)))) for k in 0:((padM>>>Wshift)-1)]...)
+        $([:($(Symbol(:vnlogrootτ_,k)) = vmul(vnh, SLEEFPirates.log($(Symbol(:vτma_,k))))) for k in 0:((padM>>>Wshift)-1)]...)
+        τscales = $(Expr(:tuple, [T(2k/(k+1)) for k in 1:padM]...))
+        @inbounds nhτ = $(Expr(:tuple, [:(($(Symbol(:vnhτ_,m>>>Wshift))[$(1+m&(W-1))]).value) for m in 0:padM-1]...))
+        @inbounds nlogrootτ = $(Expr(:tuple, [:(($(Symbol(:vnlogrootτ_,m>>>Wshift))[$(1+m&(W-1))]).value) for m in 0:padM-1]...))
+        @inbounds nhσ² = $(Expr(:tuple, [:(($(Symbol(:vnhσ²_,m>>>Wshift))[$(1+m&(W-1))]).value) for m in 0:padM-1]...))
+        @fastmath @inbounds for i in 1:$N
+            ti = treatments[j]
+            ji = j
+            αi1 = α[ji]
+            if ti == 0
+                emi1, demi1ddose, demi1demaxv, demi1ded50v = (zero($T),zero($T),zero($T),zero($T))
+            else
+                emi1, demi1ddose, demi1demaxv, demi1ded50v = ∂emax(dose[j], Eₘₐₓ[ti], ED₅₀[ti])
+            end
+            αi1²ταr = αi1 * αi1 * ταr
+            target -= 0.5 * αi1²ταr * ταr
+            dταr -= αi1²ταr
+            dtargetdαin = αi1*ταr²
+            emi1minusαi1 = emi1 - αi1
+            dtargetdαi = zero($T)
+            dtargetdemaxv = zero($T)
+            dtargetded50v = zero($T)
+            s = zero($T)
+            j += 1
+            # fill!(dsdemax, 0.0)
+            for k in 1:col_lengths[i]-1
+                t = treatments[j]
+                emik, demikddose, demikdemaxv, demikded50v = ∂emax(dose[j], Eₘₐₓ[t], ED₅₀[t])
+                δik = α[j] - emik + emi1minusαi1
+                sscale = 1 / k
+                # f, dfdy, dfdμ, dfdτ = dnormal_lpdf( δik, s*sscale, τ * τscale, logτs[k-1] )
+                f, dfdy, dfdμ, dfdτ = ∂normal_lpdf( δik, s*sscale, nhτ[k], nlogrootτ[k], nhσ²[k] )
+                target += f
+                # @show dfdτ, τscales[k]
+                dτ += dfdτ * τscales[k]
+                dtargetdαi -= dfdy * sscale
+                if ti > 0
+                    dtargetdemaxv += dfdy*demi1demaxv*sscale
+                    dtargetded50v += dfdy*demi1ded50v*sscale
+                end
+                for p in 1:k-1
+                    tp = treatments[j + p - k]
+                    dαv[j + p - k] += dfdμ*sscale
+                    demaxv[tp] -= dsdemax[1,p]*dfdμ*sscale
+                    ded50v[tp] -= dsdemax[2,p]*dfdμ*sscale
+                end
+                $(Expr(isinitialized(∂ΑN) ? :(+=) : :(=), :(dαv[j]), :dfdy))
+                demaxv[t] -= dfdy*demikdemaxv
+                ded50v[t] -= dfdy*demikded50v
+                dsdemax[1,k] = demikdemaxv
+                dsdemax[2,k] = demikded50v
+                s += δik
+                j += 1
+            end
+            $(Expr(isinitialized(∂ΑN) ? (+=) : :(=), :(dαv[ji]), :(dtargetdαi - dtargetdαin)))
+            if ti > 0
+                demaxv[ti] += dtargetdemaxv
+                ded50v[ti] += dtargetded50v
+            end
+        end
+        target = muladd($(T(N)), Base.log(ταr), target)
+        dταr = muladd($(T(N)), σᵤ, dταr)
+        $(Expr(isinitialized(∂ΣμN) ? :(+=) : :(=), :(∂σᵤ[]), :(dταrdσᵤ*dταr)))
+        $(Expr(isinitialized(∂ΣN) ? :(+=) : :(=), :(∂σ[]), :(dτ*dτdσ)))
+        target
+    end
+end
 @generated function ∂EₘₐₓNMA(
     sp::StackPointer, α::AbstractVector{T}, σᵤ::T, Eₘₐₓ::AbstractFixedSizeVector{C,T}, ED₅₀::AbstractFixedSizeVector{C,T}, σ::T,
     treatments::StructuredMatrices.FixedSizeRaggedMatrix{M,N,P,<:Integer,<:Integer}, dose::AbstractVector{T},
