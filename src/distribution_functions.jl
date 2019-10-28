@@ -107,6 +107,10 @@ end
     @assert y_is_param == false
     Bernoulli_logit_quote(T)
 end
+function Bernoulli_logit_constant(y::BitVector, α::AbstractVector{T}, ::Val{track} = Val{(false,true)}()) where {T,track}
+    zero(T)
+end
+
 function ∂Bernoulli_logit_quote(T, initialized::Bool = false)
     W = VectorizationBase.pick_vector_width(T)
     ∂αop = initialized ? :(+=) : :(=)
@@ -187,6 +191,31 @@ end
     s_is_param, α_is_param, N_is_param = track
     @assert !s_is_param && !N_is_param
     Binomial_logit_quote(T, true)
+end
+
+# faster, works for Floats that can't be convered to Int
+# lbinom(n, p) = lgamma(n+1) - lgamma(n-p+1) - lgamma(p+1) 
+# more accurate, but doesn't allow n or p to have decimals.
+lbinom(n, p) = first(logabsbinomial(trunc(Int,n), trunc(Int,p))) 
+function Binomial_logit_constant(
+    s::AbstractVector{T}, α::AbstractVector{T}, N::AbstractVector{T},
+    ::Val{track} = Val{(false,true,false)}()
+) where {track,T}
+    c = zero(T)
+    @inbounds for i ∈ eachindex(s, N)
+        c += lbinom(N[i],s[i])
+    end
+    c
+end
+function Binomial_logit_constant(
+    s::AbstractVector{T}, α::AbstractVector{T}, N::T,
+    ::Val{track} = Val{(false,true,false)}()
+) where {track,T}
+    c = zero(T)
+    @inbounds for i ∈ eachindex(s)
+        c += lbinom(N,s[i])
+    end
+    c
 end
 
 function ∂Binomial_logit_quote(T, nconst::Bool = false, initialized::Bool = false)
@@ -289,6 +318,7 @@ push!(DISTRIBUTION_DIFF_RULES, :Binomial_logit)
     end
     simplify_expr(q)
 end
+Bernoulli_logit_fmadd_constant(y, X, β, α, ::Any) = zero(eltype(β))
 @generated function ∂Bernoulli_logit_fmadd!(
     ::Nothing, ::Nothing, ∂β::∂Β, ∂α::∂Α,
     y::BitVector, X::AbstractMatrix{T}, β::AbstractVector{T}, α::AbstractFloat,
@@ -390,16 +420,55 @@ push!(DISTRIBUTION_DIFF_RULES, :Bernoulli_logit_fmadd)
 
 
 @generated function LKJ(L::AbstractCorrCholesky{N,T}, η::T, ::Val{track}) where {N,T,track}
-    quote
-        #out = zero($T)
-        target = vbroadcast(SVec{$(VectorizationBase.pick_vector_width(N-1,T)),$T}, zero($T))
-
-        # @fastmath @inbounds @simd ivdep for n ∈ 1:$(N-1)
-        @vectorize $T for n ∈ 1:$(N-1)
-            target = vmuladd( ($(N - 3) - n + 2η), SLEEFPirates.log(L[n+1]), target)
+    W = VectorizationBase.pick_vector_width(N-1,T)
+    # If the remainder is 1, we'll skip the first element (which equals 1, so the log is 0)
+    # otherwise, we wont skip, because memory should be aligned with accessing the first element.
+    rem1 = (N % W) == 1
+    track_L, track_η = track
+    if !track_L && !track_η
+        return zero(T)
+    end
+    if track_L
+        q = quote
+            target = vbroadcast(Vec{$W,$T}, zero($T))
+            logdiag = DistributionParameters.logdiag(L)
+            @vvectorize $T for n ∈ 1:$(rem1 ? N-1 : N)
+                target = vmuladd( ($(N - 3) - n + 2η), logdiag[$(rem1 ? :(n+1) : :n)], target)
+            end
         end
-        extract_data(target)
-    end |> simplify_expr
+    end
+    if track_η
+        ηtarget = track_L ? :starget : :target
+        ηoneadjust = if isodd(N)
+            T(0.25 * (N * N - 1) * log(π) - 0.25abs2(N-1) * log(2) - (N-1) * first(logabsgamma(0.5*(N+1))))
+        else
+            T(0.25N*(N-2)*log(π) + 0.25 * (3N^2 - 4N) * log(2) + N*first(logabsgamma(0.5N)) - (N-1)*first(logabsgamma(N)))
+        end
+        q_η = quote
+            $ηtarget = zero($T)
+            if η == one($T)
+                for n ∈ 1:$(N-1)
+                    $ηtarget -= first(logabsgamma($(T(2))*n))
+                end
+                # more accurate to sum this way?
+                ηtarget -= $ηoneadjust
+            else
+                for n ∈ 1:$(N-1)
+                    $ηtarget -= 0.5n * $(log(π)) + first(logabsgamma(η + 0.5*($(N-1) - n)))
+                end
+                $ηtarget += $(N-1)*first(logabsgamma(η + $(0.5*(N-1))))
+            end
+        end
+        if track_L
+            vstarget = Expr(:tuple,:(Core.VecElement(starget)),[:(Core.VecElement(zero($T))) for _ ∈ 1:W-1]...)
+            push!(q.args, :(target = vadd(target, $vstarget)))
+        end
+    end
+    push!(q.args, :target)
+    simplify_expr(q)
+end
+@generated function LKJ_constant(L::AbstractCorrCholesky{N,T}, η::T, ::Val{track}) where {N,T,track}
+    :(LKJ(L,η,Val{$((!track[1],!track[2]))}()))
 end
 @generated function ∂LKJ!(
     ∂L::PL, ∂η::Pη,
