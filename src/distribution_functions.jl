@@ -1085,12 +1085,12 @@ end
     yisvec = true
     αisvec = isa(α, PaddedMatrices.AbstractFixedSizeVector)
     βisvec = isa(β, PaddedMatrices.AbstractFixedSizeVector)
-    track_y
-    track_α
-    track_β
-    inity
-    initα
-    initβ
+    track_y = ∂YN !== Nothing
+    track_α = ∂YΑ !== Nothing
+    track_β = ∂YΒ !== Nothing
+    inity = !isinitialized(∂YN)
+    initα = !isinitialized(∂YΑ)
+    initβ = !isinitialized(∂YΒ)
     beta_quote(
         M, T, (yisvec, αisvec, βisvec), (track_y, track_α, track_β), (inity, initα, initβ), true
     )
@@ -1126,53 +1126,40 @@ end
 push!(DISTRIBUTION_DIFF_RULES, :Beta)
 
 
-function lsgg_quotebeta_quote(
+function lsgg_quote(
     M::Int, T,
-    yisvec::Bool, αisvec::Bool, ϕisvec::Bool, δisvec::Bool, σisvec::Bool,
+    (yisvec, αisvec, ϕisvec, δisvec, σisvec)::NTuple{5,Bool},
     (track_y, track_α, track_ϕ, track_δ, track_σ)::NTuple{5,Bool},
-    partial::Bool, sp::Bool
+    (inity, initα, initϕ, initδ, initσ)::NTuple{5,Bool},
+    partial::Bool
 )
-#    s = T(log(log(100)))
-    # smy = s - y
-    # α * smy - exp(ϕ * (smy - δ));
     @assert !any((track_α, track_ϕ, track_δ, track_σ))
-
-    # ϕ = log(β)
-    
     q = quote end
-#    pre_quote = quote end
-#    return_expr = Expr(:tuple, :(extract_data(target)))
-#    loop = any((yisvec, αisvec, ϕisvec, δisvec, σisvec))
-    # set initialized_target to loop; if we are looping, we'll start out at zero
-#    initialized_target = loop
     yexpr = yisvec ? :(y[m]) : :y
     αexpr = αisvec ? :(α[m]) : :α
     ϕexpr = ϕisvec ? :(ϕ[m]) : :ϕ
     δexpr = δisvec ? :(δ[m]) : :δ
     σexpr = σisvec ? :(σ[m]) : :σ
-
     push!(q.args, :(smy = $σexpr - $yexpr) )
     push!(q.args, :(asmy = $αexpr * smy))
     push!(q.args, :(smyd = smy - $ϕexpr) )
     push!(q.args, :(ptsmyd = smyd * $δexpr) )
     push!(q.args, :(eptsmyd = $(any((yisvec, ϕisvec, δisvec, σisvec)) ? :SLEEFPirates : :Base).exp(ptsmyd)) )
-
     W = VectorizationBase.pick_vector_width(M,T)
-
     if partial
+        ∂yop = inity ? :(=) : :(+=)
         if yisvec
             return quote
                 # Inlined because of Julia SIMD corruption bug (if sp)
                 # inlined to avoid heap allocation of mvector (if !sp)
                 $(Expr(:meta,:inline))
-                $(sp ? :((sp, ∂y) = PtrVector{$M,$T}(sp)) : :( ∂y = FixedSizeVector{$M,$T}(undef)))
                 target = SIMDPirates.vbroadcast(Vec{$W,$T}, zero($T))
                 LoopVectorization.@vvectorize for m ∈ 1:$M
                     $q
                     target = LoopVectorization.SIMDPirates.vadd(SIMDPirates.vsub(asmy, eptsmyd), target)
-                    ∂y[m] = SIMDPirates.vfmsub($δexpr, eptsmyd, $αexpr)
+                    $(Expr(∂yop, :(∂y[m]), :(SIMDPirates.vfmsub($δexpr, eptsmyd, $αexpr))))
                 end
-                $(sp ? :(sp, (target, ∂y')) : :(target, ∂y'))
+                target
             end
         else
             @assert !any((αisvec, ϕisvec, δisvec, σisvec))
@@ -1180,9 +1167,9 @@ function lsgg_quotebeta_quote(
                 @fastmath begin
                     $q
                     target = asmy - eptsmyd
-                    ∂y = $δexpr * eptsmyd - $αexpr
+                    $(Expr(∂yop, :(∂y[]), :($δexpr * eptsmyd - $αexpr)))
                 end
-                $(sp ? :(sp, (target, ∂y)) : :(target, ∂y))
+                target
             end
         end
     else
@@ -1209,34 +1196,74 @@ function lsgg_quotebeta_quote(
         end
     end
 end
+function lsgg_alloc_quote(
+    M::Int, T,
+    (yisvec, αisvec, ϕisvec, δisvec, σisvec)::NTuple{5,Bool},
+    (track_y, track_α, track_ϕ, track_δ, track_σ)::NTuple{5,Bool},
+    sp::Bool
+)
+    @assert !any((track_α, track_ϕ, track_δ, track_σ))
+    if yisvec
+        return quote
+            # Inlined because of Julia SIMD corruption bug (if sp)
+            # inlined to avoid heap allocation of mvector (if !sp)
+            $(Expr(:meta,:inline))
+            $(sp ? :((sp, ∂y) = PtrVector{$M,$T}(sp)) : :( ∂y = FixedSizeVector{$M,$T}(undef)))
+            target = ∂lsgg!(uninitialized(∂y),nothing,nothing,nothing,nothing,y,α,ϕ,δ,σ)
+            $(sp ? :(sp, (target, ∂y)) : :(target, ∂y))
+        end
+    else
+        @assert !any((αisvec, ϕisvec, δisvec, σisvec))
+        return quote
+            ∂y = Ref{$T}()
+            target = ∂lsgg!(uninitialized(∂y),nothing,nothing,nothing,nothing,y,α,ϕ,δ,σ)
+        end
+        $(sp ? :(sp, (target, ∂y[])) : :(target, ∂y[]))
+    end
+end
 
 @generated function lsgg(y::AbstractFixedSizeVector{M,T}, α, ϕ, δ, σ, ::Val{track}) where {M,T,track}
-    lsgg_quotebeta_quote(
-        M, T, true,
+    lsgg_quote(
+        M, T, (true,
         α <: AbstractArray,
         ϕ <: AbstractArray,
         δ <: AbstractArray,
-        σ <: AbstractArray,
-        track, false, false
+        σ <: AbstractArray),
+        track, ntuple(_ -> false, Val(5)), false
+    )
+end
+@generated function ∂lsgg!(
+    ∂y::∂YN, ∂α::Nothing, ∂ϕ::Nothing, ∂δ::Nothing, ∂σ::Nothing,
+    y::AbstractFixedSizeVector{M,T}, α, ϕ, δ, σ
+) where {∂YN, M, T}
+    yisvec = true
+    αisvec = isa(α, PaddedMatrices.AbstractFixedSizeVector)
+    ϕisvec = isa(ϕ, PaddedMatrices.AbstractFixedSizeVector)
+    δisvec = isa(δ, PaddedMatrices.AbstractFixedSizeVector)
+    σisvec = isa(σ, PaddedMatrices.AbstractFixedSizeVector)
+    track = (true, false, false, false, false)
+    init = (!isinitialized(∂YN), false, false, false, false)
+    lsgg_quote(
+       M, T, (yisvec, αisvec, ϕisvec, δisvec, σisvec), track, init, true
     )
 end
 @generated function ∂lsgg(y::AbstractFixedSizeVector{M,T}, α, ϕ, δ, σ, ::Val{track}) where {M,T,track}
-    lsgg_quotebeta_quote(
-        M, T, true,
+    lsgg_alloc_quote(
+        M, T, (true,
         α <: AbstractArray,
         ϕ <: AbstractArray,
         δ <: AbstractArray,
-        σ <: AbstractArray,
+        σ <: AbstractArray),
         track, true, false
     )
 end
 @generated function ∂lsgg(sp::StackPointer, y::AbstractFixedSizeVector{M,T}, α, ϕ, δ, σ, ::Val{track}) where {M,T,track}
-    lsgg_quotebeta_quote(
-        M, T, true,
+    lsgg_alloc_quote(
+        M, T, (true,
         α <: AbstractArray,
         ϕ <: AbstractArray,
         δ <: AbstractArray,
-        σ <: AbstractArray,
+        σ <: AbstractArray),
         track, true, true
     )
 end
@@ -1247,10 +1274,24 @@ end
         δ <: AbstractArray,
         σ <: AbstractArray,
     ))
-    lsgg_quotebeta_quote(
-        1, T, false,
-        false,false,false,false,
-        track, false, false
+    lsgg_quote(
+        1, T, (false,false,false,false,false),
+        track, (false,false,false,false,false), false
+    )
+end
+@generated function ∂lsgg!(
+    ∂y::∂YN, ∂α::Nothing, ∂ϕ::Nothing, ∂δ::Nothing, ∂σ::Nothing,
+    y::T, α, ϕ, δ, σ
+) where {T<:Real,∂YN}
+    @assert !any((
+        α <: AbstractArray,
+        ϕ <: AbstractArray,
+        δ <: AbstractArray,
+        σ <: AbstractArray,
+    ))
+    lsgg_alloc_quote(
+        1, T, (false,false,false,false,false),
+        track, (!isinitialized(T),false,false,false,false), true
     )
 end
 @generated function ∂lsgg(y::T, α, ϕ, δ, σ, ::Val{track}) where {T<:Real,track}
@@ -1260,23 +1301,19 @@ end
         δ <: AbstractArray,
         σ <: AbstractArray,
     ))
-    lsgg_quotebeta_quote(
-        1, T, false,
-        false,false,false,false,
-        track, true, false
+    lsgg_alloc_quote(
+        1, T, (false,false,false,false,false), track, false
     )
 end
-@generated function ∂lsgg(sp::StackPointer, y::T, α, ϕ, δ, σ, ::Val{track}) where {T<:Real,track}
+@generated function ∂lsgg(sp::StackPointer, y::T, α, ϕ, δ, σ, ::Val{track}) where {T,track}
     @assert !any((
         α <: AbstractArray,
         ϕ <: AbstractArray,
         δ <: AbstractArray,
         σ <: AbstractArray,
     ))
-    lsgg_quotebeta_quote(
-        1, T, false,
-        false,false,false,false,
-        track, true, true
+    lsgg_alloc_quote(
+        1, T, (false,false,false,false,false), track, true
     )
 end
 push!(DISTRIBUTION_DIFF_RULES, :lsgg)
