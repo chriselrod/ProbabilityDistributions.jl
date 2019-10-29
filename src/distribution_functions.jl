@@ -430,45 +430,48 @@ push!(DISTRIBUTION_DIFF_RULES, :Bernoulli_logit_fmadd)
     end
     if track_L
         q = quote
-            target = vbroadcast(Vec{$W,$T}, zero($T))
-            logdiag = DistributionParameters.logdiag(L)
+            target = vbroadcast(SVec{$W,$T}, zero($T))
+            logd = DistributionParameters.logdiag(L)
             @vvectorize $T for n ∈ 1:$(rem1 ? N-1 : N)
-                target = vmuladd( ($(N - 3) - n + 2η), logdiag[$(rem1 ? :(n+1) : :n)], target)
+                target = vfmadd( ($(N - 3) - n + 2η), logd[$(rem1 ? :(n+1) : :n)], target)
             end
+            vtarget = extract_data(target)
         end
     end
     if track_η
         ηtarget = track_L ? :starget : :target
         ηoneadjust = if isodd(N)
-            T(0.25 * (N * N - 1) * log(π) - 0.25abs2(N-1) * log(2) - (N-1) * first(logabsgamma(0.5*(N+1))))
+            T(0.25*(N - 1)*log(π) - 0.25abs2(N-1) * log(2) - (N-1) * first(logabsgamma(0.5*(N+1))))
         else
-            T(0.25N*(N-2)*log(π) + 0.25 * (3N^2 - 4N) * log(2) + N*first(logabsgamma(0.5N)) - (N-1)*first(logabsgamma(N)))
+            T(-0.25*(N)*log(π) + 0.25N * (3N - 4)*log(2) + N*first(logabsgamma(0.5N)) - (N-1)*first(logabsgamma(N)))
         end
         q_η = quote
             $ηtarget = zero($T)
             if η == one($T)
-                for n ∈ 1:$(N-1)
+                for n ∈ 1:$((N-1) >>> 1)
                     $ηtarget -= first(logabsgamma($(T(2))*n))
                 end
                 # more accurate to sum this way?
-                ηtarget -= $ηoneadjust
+                $ηtarget -= $ηoneadjust
             else
                 for n ∈ 1:$(N-1)
-                    $ηtarget -= 0.5n * $(log(π)) + first(logabsgamma(η + 0.5*($(N-1) - n)))
+                    $ηtarget -= first(logabsgamma(η + 0.5*($(N-1) - n)))
                 end
                 $ηtarget += $(N-1)*first(logabsgamma(η + $(0.5*(N-1))))
             end
         end
+        push!(q.args, q_η)
         if track_L
-            vstarget = Expr(:tuple,:(Core.VecElement(starget)),[:(Core.VecElement(zero($T))) for _ ∈ 1:W-1]...)
-            push!(q.args, :(target = vadd(target, $vstarget)))
+            vstarget = :(Base.setindex(vbroadcast(Vec{$W,$T}, zero($T)), Core.VecElement($ηtarget), 1))
+            push!(q.args, :(vadd(vtarget, $vstarget)))
+        else
+            push!(q.args, ηtarget)
         end
     end
-    push!(q.args, :target)
     simplify_expr(q)
 end
 @generated function LKJ_constant(L::AbstractCorrCholesky{N,T}, η::T, ::Val{track}) where {N,T,track}
-    :(LKJ(L,η,Val{$((!track[1],!track[2]))}()))
+    :(LKJ(L,η,Val{$((!track[1],!track[2]))}()) - $(0.5*log(π)*StructuredMatrices.binomial2(N)))
 end
 @generated function ∂LKJ!(
     ∂L::PL, ∂η::Pη,
@@ -484,56 +487,63 @@ end
         η_uninit = !isinitialized(Pη)
         ∂ηop = η_uninit ? :(=) : :(+=)
     end
+    W = VectorizationBase.pick_vector_width(N-1,T)
+    if track_η
+        ∂η_q = quote
+            starget = zero($T)
+            for n ∈ 1:$(N-1)
+                c = η + 0.5*($(N-1) - n) # ∂c/∂η = 1
+                starget -= first(logabsgamma(c))
+                ∂ηs -= digamma(c) # ∂target/∂η = ∂target/∂c * ∂c/∂η = -digamma(c) * 1
+            end
+            $(Expr(∂ηop, :(∂η[]), ∂ηs))
+            vadd(extract_data(target), Base.setindex(vbroadcast(Vec{$W,$T},zero($T)), startget, 1))
+        end
+        ret_expr = :(
+    end
     if track_L && track_η
         q = quote
-            target = vbroadcast(Vec{$(VectorizationBase.pick_vector_width(N-1,T)),$T}, zero($T))
+            target = vbroadcast(SVec{$W,$T}, zero($T))
+            logd = DistributionParameters.logdiag(L)
             ∂ηs = zero($T)
             @vvectorize $T for n ∈ 1:$(N-1)
-                ∂ηₙ = log(L[n+1])
+                ∂ηₙ = logd[n+1]
                 coef = ($(N - 3) - n + 2η)
-                target = vmuladd( coef, ∂ηₙ, target )
+                target = vfmadd( coef, ∂ηₙ, target )
                 $(Expr(∂Lop, :(∂L[n+1]), :(coef / L[n+1])))
                 ∂ηs += $(T(2))*∂ηₙ
             end
-            $(Expr(∂ηop, :(∂η[]), ∂ηs))
-            target
+            $∂η_q
         end
         L_uninit && pushfirst!(q.args, :(@inbounds ∂L[1] = 0))
     elseif track_L
         q = quote
-            target = vbroadcast(SVec{$(VectorizationBase.pick_vector_width(N-1,T)),$T}, zero($T))
+            target = vbroadcast(SVec{$W,$T}, zero($T))
+            logd = DistributionParameters.logdiag(L)
             @vvectorize $T for n ∈ 1:$(N-1)
-                ∂ηₙ = log(L[n+1])
+                ∂ηₙ = logd[n+1]
                 coef = ($(N - 3) - n + 2η)
-                target = vmuladd(coef, ∂ηₙ, target)
+                target = vfmadd(coef, ∂ηₙ, target)
                 $(Expr(∂Lop, :(∂L[n+1]), :(coef / L[n+1])))
             end
-            target
+            extract_data(target)
         end
         L_uninit && pushfirst!(q.args, :(@inbounds ∂L[1] = 0))
     elseif track_η
         q = quote
-            target = vbroadcast(Vec{$(VectorizationBase.pick_vector_width(N-1,T)),$T}, zero($T))
+            target = vbroadcast(SVec{$W,$T}, zero($T))
+            logd = DistributionParameters.logdiag(L)
             ∂ηs = zero($T)
             @vvectorize $T for n ∈ 1:$(N-1)
-                ∂ηₙ = log(L[n+1])
+                ∂ηₙ = logd[n+1]
                 coef = ($(N - 3) - n + 2η)
-                target = vmuladd( coef, ∂ηₙ, target )
+                target = vfmadd( coef, ∂ηₙ, target )
                 ∂ηs += $(T(2))*∂ηₙ
             end
-            $(Expr(∂ηop, :(∂η[]), ∂ηs))
-            target#, ∂η
+            $∂η_q
         end
     else
-        q = quote
-            target = vbroadcast(Vec{$(VectorizationBase.pick_vector_width(N-1,T)),$T}, zero($T))
-            @vvectorize $T for n ∈ 1:$(N-1)
-                ∂ηₙ = log(L[n+1])
-                coef = ($(N - 3) - n + 2η)
-                target = vmuladd( coef, ∂ηₙ, target)
-            end
-            target
-        end
+        return zero(T)
     end
     simplify_expr(q)
 end
