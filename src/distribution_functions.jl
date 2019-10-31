@@ -85,7 +85,7 @@ push!(FMADD_DISTRIBUTIONS, :Bernoulli_logit)
 function Bernoulli_logit_quote(T)
     W = VectorizationBase.pick_vector_width(T)
     q = quote
-        # $(Expr(:meta, :inline))
+        $(Expr(:meta, :inline))
         target = vbroadcast(Vec{$W,$T}, zero($T))
         @vvectorize $T for i ∈ eachindex(y)
             αᵢ = α[i]
@@ -115,7 +115,7 @@ function ∂Bernoulli_logit_quote(T, initialized::Bool = false)
     W = VectorizationBase.pick_vector_width(T)
     ∂αop = initialized ? :(+=) : :(=)
     q = quote
-        # $(Expr(:meta, :inline))
+        $(Expr(:meta, :inline))
         target = vbroadcast(Vec{$W,$T}, zero($T))
         @vvectorize $T for i ∈ eachindex(y)
             αᵢ = α[i]
@@ -162,7 +162,7 @@ push!(DISTRIBUTION_DIFF_RULES, :Bernoulli_logit)
 function Binomial_logit_quote(T, yconst::Bool = false)
     W = VectorizationBase.pick_vector_width(T)
     q = quote
-        # $(Expr(:meta, :inline))
+        $(Expr(:meta, :inline))
         target = vbroadcast(Vec{$W,$T}, zero($T))
         @vvectorize $T for i ∈ eachindex(s)
             αᵢ = α[i]
@@ -222,7 +222,7 @@ function ∂Binomial_logit_quote(T, nconst::Bool = false, initialized::Bool = fa
     W = VectorizationBase.pick_vector_width(T)
     ∂αop = initialized ? :(+=) : :(=)
     q = quote
-        # $(Expr(:meta, :inline))
+        $(Expr(:meta, :inline))
         target = vbroadcast(Vec{$W,$T}, zero($T))
         @vvectorize $T for i ∈ eachindex(s)
             αᵢ = α[i]
@@ -291,7 +291,7 @@ push!(DISTRIBUTION_DIFF_RULES, :Binomial_logit)
     if PaddedMatrices.is_sized(β)
         N_β = PaddedMatrices.type_length(β)
         q = quote
-            # $(Expr(:meta, :inline))
+            $(Expr(:meta, :inline))
             # T = promote_type(eltype(α),eltype(β),eltype(X))
 #            target = zero($T)
             target = vbroadcast(Vec{$(VectorizationBase.pick_vector_width(T)),$T}, zero($T))
@@ -379,7 +379,7 @@ Bernoulli_logit_fmadd_constant(y, X, β, α, ::Any) = zero(eltype(β))
         W, Wshift = VectorizationBase.pick_vector_width_shift(T)
         # unroll_factor = max(8 >>> Wshift, 1)
         q = quote
-            # $(Expr(:meta, :inline))
+            $(Expr(:meta, :inline))
             $init_q
             @vvectorize $T for i ∈ eachindex(y)
                 # a = $(Expr(:call, :+, :α, [:(X[i,$n] * β[$n]) for n ∈ 1:N_β]...))
@@ -408,17 +408,6 @@ end
 
 push!(DISTRIBUTION_DIFF_RULES, :Bernoulli_logit_fmadd)
 
-# function ∂Bernoulli_logit_fnmadd_quote()
-
-# end
-# function ∂Bernoulli_logit_fmsub_quote()
-
-# end
-# function ∂Bernoulli_logit_fnmsub_quote()
-
-# end
-
-
 @generated function LKJ(L::AbstractCorrCholesky{N,T}, η::T, ::Val{track}) where {N,T,track}
     W = VectorizationBase.pick_vector_width(N-1,T)
     # If the remainder is 1, we'll skip the first element (which equals 1, so the log is 0)
@@ -430,6 +419,7 @@ push!(DISTRIBUTION_DIFF_RULES, :Bernoulli_logit_fmadd)
     end
     if track_L
         q = quote
+            $(Expr(:meta,:inline))
             target = vbroadcast(SVec{$W,$T}, zero($T))
             logd = DistributionParameters.logdiag(L)
             @vvectorize $T for n ∈ 1:$(rem1 ? N-1 : N)
@@ -503,6 +493,7 @@ end
     end
     if track_L && track_η
         q = quote
+            $(Expr(:meta,:inline))
             target = vbroadcast(SVec{$W,$T}, zero($T))
             logd = DistributionParameters.logdiag(L)
             ∂ηs = zero($T)
@@ -518,6 +509,7 @@ end
         L_uninit && pushfirst!(q.args, :(@inbounds ∂L[1] = 0))
     elseif track_L
         q = quote
+            $(Expr(:meta,:inline))
             target = vbroadcast(SVec{$W,$T}, zero($T))
             logd = DistributionParameters.logdiag(L)
             @vvectorize $T for n ∈ 1:$(N-1)
@@ -531,6 +523,7 @@ end
         L_uninit && pushfirst!(q.args, :(@inbounds ∂L[1] = 0))
     elseif track_η
         q = quote
+            $(Expr(:meta,:inline))
             target = vbroadcast(SVec{$W,$T}, zero($T))
             logd = DistributionParameters.logdiag(L)
             ∂ηs = zero($T)
