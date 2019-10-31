@@ -1,19 +1,46 @@
 
-
-struct StandardDeviation{T,P,L}
-    σ::T
-    σ⁻¹::T
-    ∂σ∂i::P
-    logσ::L
+"""
+σ⁻²   : multiply with δ² / -2 to get kernel-component of density
+ld    : multiply with -logdet_coef to get logdet component of density
+∂k∂i  : multiply with δ²σ⁻² to get ∂kernel-component/∂input
+∂ld∂i : multiply with -logdet_coef to get ∂logdet-component/∂input
+"""
+struct Precision{T,P,L}
+    σ⁻²::T
+    ld::T
+    ∂k∂i::P
 end
-struct StandardDeviationArray{S,I,L}
-    σ::S
-    σ⁻¹::I
-    logσ::L
-end
+# struct PrecisionArray{I,P,L}
+    # σ⁻¹::I
+    # σ⁻²::P
+    # logσ::L
+# end
 
-@inline logdet_coef(Y, args...) = -Float64(size(Y, 1))
-@inline canonicalize_Σ(σ::T) where {T<:Real} = StandardDeviation{T,One}( σ, Base.FastMath.inv_fast(σ), One(), log(σ) )
+@inline logdet_coef(Y, args...) = Float64(size(Y, 1))
+@inline function canonicalize_Σ(σ::Real)
+    σ⁻¹ = Base.FastMath.inv_fast( VectorizationBase.extract_data(σ) )
+    σ⁻² = Base.FastMath.abs2_fast( σ⁻¹ )
+    Precision( σ⁻², log(σ), nothing )
+end
+@inline function ∂canonicalize_Σ(σ::Real)
+    σ⁻¹ = Base.FastMath.inv_fast(VectorizationBase.extract_data(σ))
+    σ⁻² = Base.FastMath.abs2_fast( σ⁻¹ )
+    # nσ⁻¹ = Base.FastMath.sub_fast( σ⁻¹ )
+    Precision( σ⁻², log(σ), σ⁻¹ )
+end
+@inline precision(v) = SIMDPirates.vabs2(SIMDPirates.vinv(x))
+@inline function canonicalize_Σ(σ::AbstractFixedSizeArray)
+    σ⁻² = LazyMap( precision, σ )
+    logσ = LazyMap( SLEEFPirates.log, σ )
+    Precision( σ⁻², logσ, nothing )
+end
+@inline function ∂canonicalize_Σ(σ::AbstractFixedSizeArray)
+    # Trust compiler to elliminate redundant
+    σ⁻¹ = LazyMap( vinv, σ ) 
+    σ⁻² = LazyMap( precision, σ )
+    logσ = LazyMap( SLEEFPirates.log, σ )
+    Precision( σ⁻², logσ, σ⁻¹ )
+end
 @inline function canonicalize_Σ(σ::S) where {S <: Integer}
     T = promote_type(S, Float64)
     canonicalize_Σ(convert(T, σ))
@@ -21,42 +48,61 @@ end
 @inline canonicalize_Σ(σ²::UniformScaling{Bool}) = One()
 @inline function canonicalize_Σ(σ²I::UniformScaling{T}) where {T <: Real}
     σ² = σ²I.λ
-    σ = Base.FastMath.sqrt_fast(σ²)
-    σ⁻¹ = Base.FastMath.inv_fast(σ)
-    ∂σ∂σ² = Base.FastMath.mul_fast(0.5, σ⁻¹)
-    StandardDeviation(
-        σ, σ⁻¹, ∂σ∂σ², log(σ)
+    σ⁻² = Base.FastMath.inv_fast(VectorizationBase.extract_data(σ²))
+    Precision(
+        σ⁻², Base.FastMat.div_fast(Base.log(σ⁻²),2), nothing
     )
 end
-@inline function canonicalize_Σ(σ::RealFloat)
-    StandardDeviation( σ.r, Base.FastMath.inv_fast(σ.r), One(), log(σ) )
-end
-@inline function canonicalize_Σ(σ::AbstractFixedSizeArray)
-    StandardDeviation( PtrArray(σ), LazyMap(vinv, σ), LazyMap(SLEEFPirates.log, σ) )
-end
+@inline Base.inv(σ::Union{Precision,PrecisionArray}) = σ.σ⁻¹
+@inline SIMDPirates.vinv(σ::Union{Precision,PrecisionArray}) = σ.σ⁻¹
+@inline loginvroot(σ::Union{Precision,PrecisionArray}) = σ.logσ
+
+@inline precision(λ::Precision) = λ.σ⁻²
+@inline precision(::One) = One()
+@inline LinearAlgebra.logdet(λ::Precision) = λ.ld
+@inline PaddedMatrices.nlogdet(λ::Precision) = Base.FastMath.sub_fast(λ.ld)
+@inline LinearAlgebra.logdet(::One) = Zero()
+@inline PaddedMatrices.nlogdet(::One) = Zero()
+@inline ∂k∂i(λ::Precision) = λ.∂k∂i
+@inline ∂k∂i(λ::Precision{T,Nothing}) = Base.FastMath.mul_fast(T(0.5), λ.σ⁻²) # Variance
+@inline ∂ld∂i(λ::Precision{T,Nothing}) = Base.FastMath.mul_fast(T(0.5), λ.σ⁻²) # Variance
+@inline ∂ld∂i(λ::Precision{T,P}) where {T,P<:Real} = λ.∂k∂i # St.Dev
 
 """
 The normal distribution can be split into
 Normal(args...) = Normal_kernel(args...) + logdet_coef(args...)*logdet(last(args))
 """
-
-function Normal(args...)
+Normal(y) = normal_kernel(y)
+Normal(::Val{track}, y) where {track} = (first(track) == true ? normal_kernel(y) : Zero())
+∂Normal!(∂y, y) = ∂Normal_kernel!(∂y, y)
+function Normal(::Val{track}, args...) where {track}
     fargs = Base.front(args)
     L = canonicalize_Σ(last(args))
-    tadd(vmul(logdet_coef(fargs..., L), logdet(L)), Normal_kernel(fargs...,L))
+    if last(track) == true
+        tadd(vmul(logdet_coef(fargs..., L), nlogdet(L)), Normal_kernel(fargs...,L))
+    else
+        Normal_kernel(fargs...,L)
+    end
 end
-@generated function ∂Normal(args::Vararg{<:Any,N}) where {N}
+@generated function ∂Normal!(args::Vararg{<:Any,N}) where {N}
     Nargs = N >>> 1
     @assert N & 1 == 0 "Number of arguments is not odd." # separate ::StackPointer function
-    quote
-        @inbounds (∂Ldiv∂Σ, L) = ∂canonicalize_Σ(args[$N])
-        @inbounds kern = $(Expr(:call, :∂Normal_kernel!, [:(args[$n]) for n ∈ 1:N-1]..., L)) # if uninitialized, this initializes
-        @inbounds ∂TARGETdiv∂L = initialized(args[$Nargs]) # so here we adjust type
-        logdetL = ∂logdet!(∂TARGETdiv∂L, L)
-        ∂TARGETdiv∂Σ = ∂TARGETdiv∂L # alias
-        ReverseDiffExpressionsBase.RESERVED_INCREMENT_SEED_RESERVED!(∂TARGETdiv∂Σ, ∂Ldiv∂Σ, ∂TARGETdiv∂L) # adjust based on canonicalization
-        tadd(vmul(logdet_coef(args...), logdetL), kern)
-    end    
+    if args[N] === Nothing
+        quote
+            @inbounds L = canonicalize_Σ(args[$N])
+            @inbounds $(Expr(:call, :∂Normal_kernel!, [:(args[$n]) for n ∈ 1:N-1]..., L)) # if uninitialized, this initializes
+        end
+    else
+        quote
+            @inbounds (∂Ldiv∂Σ, L) = ∂canonicalize_Σ(args[$N])
+            @inbounds kern = $(Expr(:call, :∂Normal_kernel!, [:(args[$n]) for n ∈ 1:N-1]..., L)) # if uninitialized, this initializes
+            @inbounds ∂TARGETdiv∂L = initialized(args[$Nargs]) # so here we adjust type
+            nlogdetL = ∂nlogdet!(∂TARGETdiv∂L, L, logdet_coef(args...))
+            ∂TARGETdiv∂Σ = ∂TARGETdiv∂L # alias
+            ReverseDiffExpressionsBase.RESERVED_INCREMENT_SEED_RESERVED!(∂TARGETdiv∂Σ, ∂Ldiv∂Σ, ∂TARGETdiv∂L) # adjust based on canonicalization
+            tadd(nlogdetL, kern)
+        end
+    end
 end
 
 
