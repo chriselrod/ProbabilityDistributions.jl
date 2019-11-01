@@ -218,48 +218,6 @@ function alloc_univariate_normal_quote(M, S, @nospecialize(T), (track_y, track_�
     q
 end
 
-# @eval loop to specify normals
-for (y,μ,σ) ∈ []
-    
-
-end
-
-
-@inline Normal(y::T) where {T <: Real} = Base.FastMath.mul_fast(T(-0.5), Base.FastMath.abs2_fast(y))
-@inline Normal(::Val{true}, y::Real) = Normal(y)
-@inline Normal(::Val{false}, y::T) where {T <: Real} = zero(T)
-
-# univariate_normal_kernel_quote(
-    # M::Int, @nospecialize(T), yisvec::Bool,
-    # @nospecialize(μisvec::Union{Bool,Nothing}), @nospecialize(σisvec::Union{Bool,Nothing}),
-    # (track_y, track_μ, track_σ)::NTuple{3,Bool},
-    # (inity, initμ, initσ)::NTuple{3,Bool},
-    # partial::Bool, calclogdet::Bool = false, @nospecialize(S) = Tuple{M}
-# )
-@generated function Normal(::Val{track}, y::T, σ::Union{T,Int}) where {T <: Real, track}
-    univariate_normal_quote(
-        1, T, false, nothing, false,
-        (track[1], false, track[2]),
-        (false, false, false),
-        false, true
-    )
-end
-@generated function Normal_kernel(::Val{track}, y::T, σ::Union{T,Int}) where {T <: Real, track}
-    univariate_normal_quote(
-        1, T, false, nothing, false,
-        (track[1], false, track[2]),
-        (false, false, false),
-        false, false
-    )
-end
-@generated function Normal_kernel(::Val{track}, y::T, μ::T, σ::Union{T,Int}) where {T <: Real, track}
-    univariate_normal_quote(
-        1, T, false, false, false,
-        (track[1], track[2], track[3]),
-        (false, false, false),
-        false, false
-    )
-end
 @noinline function univariate_normal_length(SV::Core.SimpleVector, N, RV::Core.SimpleVector, L)
     fsv = first(SV)::Int
     first(RV)::Int == 1 || throw("Non-unit stride not yet supported.")
@@ -271,56 +229,11 @@ end
     end
     M
 end
-@generated function Normal_kerel(::Val{track}, y::AbstractFixedSizeArray{S,T,N,R,L}) where {S,T,N,R,L,track}
-    M = univariate_normal_length(S.parameters, N, R.parameters, L)
-    univariate_normal_quote( M, T, true, nothing, nothing, (track[1], false, false), (false,false,false), false, false )
-end
-@generated function Normal_kernel(
-    y::AbstractFixedSizeArray{S,T,N,R,L}, σ::Union{T,Int,<:AbstractFixedSizeArray{S,T,N,R,L}}, ::Val{track}
-) where {S,T,N,R,L,track}
-    M = univariate_normal_length(S.parameters, N, R.parameters, L)
-    univariate_normal_quote(
-        M, T, true, nothing, σ <: AbstractFixedSizeArray, (track[1], false, track[2]), (false,false,false), false, false
-    )
-end
-@generated function Normal_kernel(
-    ::Val{track},
-    y::AbstractFixedSizeArray{S,T,N,R,L},
-    μ::Union{T,Int,<:AbstractFixedSizeArray{S,T,N,R,L}},
-    σ::Union{T,Int,<:AbstractFixedSizeArray{S,T,N,R,L}}
-) where {S,T,N,R,L,track}
-    M = univariate_normal_length(S.parameters, N, R.parameters, L)
-    univariate_normal_quote(
-        M, T, true, μ <: AbstractFixedSizeArray, σ <: AbstractFixedSizeArray,
-        track, (false,false,false), false, false
-    )
-end
-@generated function Normal(
-    ::Val{track},
-    y::AbstractFixedSizeArray{S,T,N,R,L},
-    μ::Union{T,Int,<:AbstractFixedSizeArray{S,T,N,R,L}},
-    σ::AbstractFixedSizeArray{S,T,N,R,L}
-) where {S,T,N,R,L,track}
-    M = univariate_normal_length(S.parameters, N, R.parameters, L)
-    univariate_normal_quote( M, T, true,
-        μ <: AbstractFixedSizeArray, true, track, (false,false,false), false, true
-    )
-end
-@generated function Normal_kernel(
-    ::Val{track},
-    y::AbstractFixedSizeArray{S,T,N,R,L},
-    μ::Union{T,Int,<:AbstractFixedSizeArray{S,T,N,R,L}},
-    σ::AbstractFixedSizeArray{S,T,N,R,L}
-) where {S,T,N,R,L,track}
-    M = univariate_normal_length(S.parameters, N, R.parameters, L)
-    univariate_normal_quote( M, T, true,
-        μ <: AbstractFixedSizeArray, true, track, (false,false,false), false, false
-    )
-end
 
-
-
-@inline function ∂Normal!(∂y::U, y::T) where {T <: Real}
+@inline Normal(y::T) where {T <: Real} = Base.FastMath.mul_fast(T(-0.5), Base.FastMath.abs2_fast(y))
+@inline Normal(::Val{true}, y::Real) = Normal(y)
+@inline Normal(::Val{false}, y::T) where {T <: Real} = zero(T)
+@inline function ∂Normal!(∂y::U, y::T) where {T <: Real, U}
     t = Base.FastMath.mul_fast(T(-0.5), Base.FastMath.abs2_fast(y))
     if isinitialized(U)
         ∂y[] = FastMat.sub_fast(∂y[], y)
@@ -329,103 +242,59 @@ end
     end
     t
 end
-@inline ∂Normal!(::Nothing, y::T) where {T <: Real, U} = zero(T)
+@inline ∂Normal!(::Nothing, y::T) where {T <: Real} = zero(T)
 
-# univariate_normal_kernel_quote(
-    # M::Int, @nospecialize(T), yisvec::Bool,
-    # @nospecialize(μisvec::Union{Bool,Nothing}), @nospecialize(σisvec::Union{Bool,Nothing}),
-    # (track_y, track_μ, track_σ)::NTuple{3,Bool},
-    # (inity, initμ, initσ)::NTuple{3,Bool},
-    # partial::Bool, calclogdet::Bool = false, @nospecialize(S) = Tuple{M}
-# )
-@generated function ∂Normal(∂y::∂YN, ∂σ::∂ΣN, y::T, σ::Union{T,Int}) where {T <: Real, ∂YN, ∂ΣN}
-    univariate_normal_quote(
-        1, T, false, nothing, false,
-        (∂YN !== Nothing, false, ∂YN !== Nothing),
-        (!isinitialized(∂YN), false, !isinitialized(∂ΣN)),
-        true, true
-    )
-end
-@generated function ∂Normal_kernel!(∂y::∂YN, ∂σ::∂ΣN, y::T, σ::Union{T,Int}) where {T <: Real, ∂YN, ∂ΣN}
-    univariate_normal_quote(
-        1, T, false, nothing, false,
-        (∂YN !== Nothing, false, ∂YN !== Nothing),
-        (!isinitialized(∂YN), false, !isinitialized(∂ΣN)),
-        true, false
-    )
-end
-@generated function ∂Normal_kernel!(∂y::∂YN, ∂μ::∂MN, ∂σ::∂ΣN, y::T, ∂μ, σ::Union{T,Int}) where {T <: Real, ∂YN, ∂MN, ∂ΣN}
-    univariate_normal_quote(
-        1, T, false, false, false,
-        (∂YN !== Nothing, ∂MN !== Nothing, ∂YN !== Nothing),
-        (!isinitialized(∂YN), !isinitialized(∂MN), !isinitialized(∂ΣN)),
-        true, false
-    )
-end
-@noinline function univariate_normal_length(SV::Core.SimpleVector, N, RV::Core.SimpleVector, L)
-    fsv = first(SV)::Int
-    first(RV)::Int == 1 || throw("Non-unit stride not yet supported.")
-    if N == 1
-        M = fsv
+
+# @eval loop to specify normals
+for yisvec ∈ (true,false)
+    if yisvec
+        args = [:(y::AbstractFixedSizeArray{S,T,N,R,L})]
+        M = :(univariate_normal_length(S.parameters, N, R.parameters, L))
+        whereparams = [:S,:T,:N,:R,:L]
+        σisvec = :(σ <: AbstractFixedSizeArray)
     else
-        fsv == (RV[2])::Int || throw("Arrays with more than 1 dimension cannot be padded.")
-        M = L
+        args = [:(y::T)]
+        M = 1
+        whereparams = [:T]
+        σisvec = false
     end
-    M
+    ∂args = [:(∂y::∂YN)]; ∂whereparams = [:∂YN, :∂ΣN]
+    for μ ∈ (true,false)
+        if μ
+            push!(args, ysisvec ? :(μ::Union{T,Int,<:AbstractFixedSizeArray{S,T,N,R,L}}) : :(μ::Union{T,Int}))
+            track_μ = :(track[2])
+            track_σ = :(track[3])
+            initμ = :(!isinitialized(∂MN))
+            push!(∂args, :(∂μ::∂MN)); push!(∂whereparams, :∂MN)
+        else
+            track_μ = false
+            track_σ = :(track[2])
+            μisvec = nothing
+            initμ = :(!isinitialized(false))
+        end
+        push!(∂args, :(∂σ::∂ΣN))
+        push!(args, ysisvec ? :(σ::Union{T,Int,<:AbstractFixedSizeArray{S,T,N,R,L}}) : :(σ::Union{T,Int}))
+        for calclogdet ∈ (true,false)
+            n = calclogdet ? :Normal : :Normal_kernel
+            ∂n = calclogdet ? :∂Normal! : :∂Normal_kernel!
+            @eval @generated function $n(::Val{track}, $(args...)) where {track, $(whereparams...)}
+                univariate_normal_quote(
+                    $M, T, $yisvec, $μisvec, $σisvec,
+                    (track[1], $track_μ, $track_σ),
+                    (false, false, false),
+                    false, $calclogdet
+                )
+            end
+            @eval @generated function $∂n($(∂args...), $(args...)) where ${$(∂whereparams...), $(whereparams...)}
+                univariate_normal_quote(
+                    $M, T, $yisvec, $μisvec, $σisvec,
+                    (track[1], $track_μ, $track_σ),
+                    (!isinitialized(y), $initμ, !isinitialized(σ)),
+                    true, $calclogdet
+                )
+            end
+        end
+    end
 end
-@generated function ∂Normal_kerel!(∂y::∂YN, y::AbstractFixedSizeArray{S,T,N,R,L}) where {S,T,N,R,L, ∂YN}
-    M = univariate_normal_length(S.parameters, N, R.parameters, L)
-    univariate_normal_quote(
-        M, T, true, nothing, nothing,
-        (∂YN !== Nothing, false, false)
-        (!isinitialized(∂YN), false, false),
-        true, false
-    )
-end
-@generated function ∂Normal_kernel!(∂y::∂YN, ∂σ::∂ΣN, y::AbstractFixedSizeArray{S,T,N,R,L}, σ) where {S,T,N,R,L,∂YN,∂ΣN}
-    M = univariate_normal_length(S.parameters, N, R.parameters, L)
-    univariate_normal_quote(
-        M, T, true, nothing, σ <: AbstractFixedSizeArray,
-        (∂YN !== Nothing, false, ∂ΣN !== Nothing)
-        (!isinitialized(∂YN), false, !isinitialized(∂ΣN)),
-        true, false
-    )
-end
-@generated function Normal_kernel(
-    ::Val{track},
-    y::AbstractFixedSizeArray{S,T,N,R,L},
-    μ::Union{T,Int,<:AbstractFixedSizeArray{S,T,N,R,L}},
-    σ::Union{T,Int}
-) where {S,T,N,R,L,track}
-    M = univariate_normal_length(S.parameters, N, R.parameters, L)
-    univariate_normal_quote( M, T, true,
-        μ <: AbstractFixedSizeArray, false, track, (false,false,false), false, false
-    )
-end
-@generated function Normal(
-    ::Val{track},
-    y::AbstractFixedSizeArray{S,T,N,R,L},
-    μ::Union{T,Int,<:AbstractFixedSizeArray{S,T,N,R,L}},
-    σ::AbstractFixedSizeArray{S,T,N,R,L}
-) where {S,T,N,R,L,track}
-    M = univariate_normal_length(S.parameters, N, R.parameters, L)
-    univariate_normal_quote( M, T, true,
-        μ <: AbstractFixedSizeMatrix, true, track, (false,false,false), false, true
-    )
-end
-@generated function Normal_kernel(
-    ::Val{track},
-    y::AbstractFixedSizeArray{S,T,N,R,L},
-    μ::Union{T,Int,<:AbstractFixedSizeArray{S,T,N,R,L}},
-    σ::AbstractFixedSizeArray{S,T,N,R,L}
-) where {S,T,N,R,L,track}
-    M = univariate_normal_length(S.parameters, N, R.parameters, L)
-    univariate_normal_quote( M, T, true,
-        μ <: AbstractFixedSizeMatrix, true, track, (false,false,false), false, false
-    )
-end
-
-
-
 
 
