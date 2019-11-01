@@ -1,4 +1,5 @@
 
+@inline canonicalize_Σ(L::AbstractCovarCholesky) = L
 
 using DistributionParameters: AbstractFixedSizeCovarianceMatrix, AbstractCovarianceMatrix
 function logdet_triangle(A::AbstractMatrix{T}) where {T}
