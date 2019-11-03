@@ -86,21 +86,33 @@ function Normal(::Val{track}, args...) where {track}
 end
 @generated function ∂Normal!(args::Vararg{<:Any,N}) where {N}
     Nargs = N >>> 1
-    @assert N & 1 == 0 "Number of arguments is not odd." # separate ::StackPointer function
-    if args[N] === Nothing
+    # @assert N & 1 == 0 "Number of arguments is not odd." # separate ::StackPointer function
+    if args[Nargs + (N & 1)] === Nothing
         quote
             @inbounds L = canonicalize_Σ(args[$N])
             @inbounds $(Expr(:call, :∂Normal_kernel!, [:(args[$n]) for n ∈ 1:N-1]..., L)) # if uninitialized, this initializes
         end
     else
-        quote
-            @inbounds (∂Ldiv∂Σ, L) = ∂canonicalize_Σ(args[$N])
-            @inbounds kern = $(Expr(:call, :∂Normal_kernel!, [:(args[$n]) for n ∈ 1:N-1]..., L)) # if uninitialized, this initializes
-            @inbounds ∂TARGETdiv∂L = initialized(args[$Nargs]) # so here we adjust type
-            nlogdetL = ∂nlogdet!(∂TARGETdiv∂L, L, logdet_coef(args...))
-            ∂TARGETdiv∂Σ = ∂TARGETdiv∂L # alias
-            ReverseDiffExpressionsBase.RESERVED_INCREMENT_SEED_RESERVED!(∂TARGETdiv∂Σ, ∂Ldiv∂Σ, ∂TARGETdiv∂L) # adjust based on canonicalization
-            tadd(nlogdetL, kern)
+        if isodd(N) # then there is a StackPointer
+            quote
+                @inbounds (sp,(∂Ldiv∂Σ, L)) = ∂canonicalize_Σ(first(args), args[$N])
+                @inbounds (sp, kern) = $(Expr(:call, :∂Normal_kernel!, [:(args[$n]) for n ∈ 1:N-1]..., L)) # if uninitialized, this initializes
+                @inbounds ∂TARGETdiv∂L = initialized(args[$(Nargs+(N&1))]) # so here we adjust type
+                nlogdetL = ∂nlogdet!(∂TARGETdiv∂L, L, logdet_coef(args...))
+                ∂TARGETdiv∂Σ = ∂TARGETdiv∂L # alias
+                ReverseDiffExpressionsBase.RESERVED_INCREMENT_SEED_RESERVED!(∂TARGETdiv∂Σ, ∂Ldiv∂Σ, ∂TARGETdiv∂L) # adjust based on canonicalization
+                (sp, tadd(nlogdetL, kern))
+            end
+        else # there is no StackPointer
+            quote
+                @inbounds (∂Ldiv∂Σ, L) = ∂canonicalize_Σ(args[$N])
+                @inbounds kern = $(Expr(:call, :∂Normal_kernel!, [:(args[$n]) for n ∈ 1:N-1]..., L)) # if uninitialized, this initializes
+                @inbounds ∂TARGETdiv∂L = initialized(args[$Nargs]) # so here we adjust type
+                nlogdetL = ∂nlogdet!(∂TARGETdiv∂L, L, logdet_coef(args...))
+                ∂TARGETdiv∂Σ = ∂TARGETdiv∂L # alias
+                ReverseDiffExpressionsBase.RESERVED_INCREMENT_SEED_RESERVED!(∂TARGETdiv∂Σ, ∂Ldiv∂Σ, ∂TARGETdiv∂L) # adjust based on canonicalization
+                tadd(nlogdetL, kern)
+            end
         end
     end
 end

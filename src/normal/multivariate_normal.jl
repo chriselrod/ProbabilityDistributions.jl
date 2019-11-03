@@ -352,6 +352,12 @@ Base.@kwdef struct NormalCholeskyConfiguration{T}
     track_β::Bool = false
     track_μ::Bool = false
     track_L::Bool = false
+    allocate_partials::Bool = false
+    inity::Bool = true
+    initX::Bool = true
+    initβ::Bool = true
+    initμ::Bool = true
+    initL::Bool = true
 end
 
 
@@ -1033,7 +1039,7 @@ end
     size_T = sizeof(T)
     loopbody = quote
         Bₚ = L[p]
-        invdiag[p] = one($T) / Bₚ
+        invdiagL[p] = one($T) / Bₚ
     end
     track_L && push!(loopbody.args, :(δ²_0 = LoopVectorization.SIMDPirates.vadd(δ²_0, SLEEFPirates.log(Bₚ))))
     Mk2 = min(4, M isa Symbol ? cld(Mk,W) : cld(min(Mk,M),W) )
@@ -1041,12 +1047,8 @@ end
         $(Expr(:meta,:inline)) # because of allignment bug
 #        B = Badj.parent
         $([Expr(:(=), Symbol(:δ²_,m), :(SIMDPirates.vbroadcast($V, zero($T)))) for m ∈ 0:Mk2-1]...)
-        invdiag = $(sp ? :(PtrVector{$P,$T,$P,true}(pointer(sptr,$T))) : :(FixedSizeVector{$P,$T,$P}(undef)))
-        $(macroexpand(LoopVectorization, quote
-                      @vvectorize $T for p ∈ 1:$P
-                      $loopbody
-                      end
-                      end))
+        invdiagL = $(sp ? :(PtrVector{$P,$T,$P,true}(pointer(sptr,$T))) : :(FixedSizeVector{$P,$T,$P}(undef)))
+        $(macroexpand(LoopVectorization, :(@vvectorize $T for p ∈ 1:$P; $loopbody end)))
         ptrY = pointer(Y)
         ptrUtribase = pointer(L) + $(P*size_T)
     end
@@ -1076,18 +1078,18 @@ end
         if n_row_reps > 1
             row_loops = quote
                 for rrep ∈ 1:$n_row_reps
-                    ptrUdiag = pointer(invdiag); ptrUtri = ptrUtribase
+                    ptrUdiag = pointer(invdiagL); ptrUtri = ptrUtribase
                     $row_iter
                     $loop_increments
                 end
             end
             push!(q.args, row_loops)
         else
-            push!(q.args, :(ptrUdiag = pointer(invdiag); ptrUtri = ptrUtribase))
+            push!(q.args, :(ptrUdiag = pointer(invdiagL); ptrUtri = ptrUtribase))
             push!(q.args, row_iter)
         end
         if row_rem > 0 && n_row_reps > 0
-            push!(q.args, :(ptrUdiag = pointer(invdiag); ptrUtri = ptrUtribase))
+            push!(q.args, :(ptrUdiag = pointer(invdiagL); ptrUtri = ptrUtribase))
             push!(q.args, mutlivariate_normal_SMLT_rowiter( row_rem, Nk, col_rem, T, Ystride, n_col_reps, μdim, μstride, :ptrμ, XP, βstride, Xstride, βdim, μtransposed ))
         end
     else # Unknown number of iterations.
@@ -1108,18 +1110,18 @@ end
         row_loops = quote
             Mkrep, Mkrem = divrem($M, $Mk)
             for rrep ∈ 1:Mkrep
-                ptrUdiag = pointer(invdiag); ptrUtri = ptrUtribase
+                ptrUdiag = pointer(invdiagL); ptrUtri = ptrUtribase
                 $row_iter
                 $loop_increments
             end
             for rrep ∈ 1:Mkrem >>> $(VectorizationBase.intlog2(W))
-                ptrUdiag = pointer(invdiag); ptrUtri = ptrUtribase
+                ptrUdiag = pointer(invdiagL); ptrUtri = ptrUtribase
                 $row_iter_onevec
                 $loop_increments_onevec
             end
             row_rem_final = Mkrem & $Wm1
             if row_rem_final != 0
-                ptrUdiag = pointer(invdiag); ptrUtri = ptrUtribase
+                ptrUdiag = pointer(invdiagL); ptrUtri = ptrUtribase
                 __mask__ = VectorizationBase.mask($T, row_rem_final)
                 $row_iter_onevecmask
             end
@@ -1818,7 +1820,7 @@ end
 end
 
 @noinline function allocate_fullsize_A_stackpointer!(
-    row_increments, row_increments_rem, sptroff, config::NormalCholeskyConfiguration{T}, W, Mk, Nk, invdiagL
+    row_increments, row_increments_rem, sptroff, config::NormalCholeskyConfiguration{T}, W, Mk, Nk, invdiagLL
 ) where {T}
     @unpack M, P, track_Y, track_X, track_β, track_μ, track_L, βstride, Xstride, Ystride, μstride, μdim, sp, βdim, XP, μtransposed, arity = config
     size_T = sizeof(T)
@@ -1864,7 +1866,7 @@ end
             if μtransposed
                 delay_alloc = true
                 push!(Aquote.args, :(∂μ = PtrVector{$P,$T}(_sptr); ptr∂μ = _sptr))
-                push!(Aquote.args, :(_sptr += $(invdiagL*size_T)))
+                push!(Aquote.args, :(_sptr += $(invdiagLL*size_T)))
                 push!(delayed_allocation_quote.args, :(v∂μ = PtrMatrix{$W,$P,$T,$W,$(W*P)}(_sptr))) # accmulate in v∂μ; reduce at end
                 push!(delayed_allocation_quote.args, :(ptrv∂μ = _sptr))
                 sptroff = W*P*size_T
@@ -1936,7 +1938,7 @@ end
     Aquote, Astride, sptroff, sptroffexpr, nonempty_sptroff_expr
 end
 
-@noinline function allocate_partials_stackpointer!(row_increments, row_increments_rem, config::NormalCholeskyConfiguration{T}, W, Mk, Nk, invdiagL, ∂LL) where {T}
+@noinline function allocate_partials_stackpointer!(row_increments, row_increments_rem, config::NormalCholeskyConfiguration{T}, W, Mk, Nk, invdiagLL, ∂LL) where {T}
     @unpack M, P, track_Y, track_X, track_β, track_μ, track_L, βstride, Xstride, Ystride, μstride, μdim, sp, βdim, XP, μtransposed, arity = config
     sptroff = 0
     size_T = sizeof(T)
@@ -1955,11 +1957,11 @@ end
                 Aquote = quote
                     ∂μ = PtrVector{$P,$T}(_sptr)
                     ptr∂μ = _sptr
-                    _sptr += $(invdiagL*size_T)
+                    _sptr += $(invdiagLL*size_T)
                     v∂μ = PtrMatrix{$W,$P,$T,$W,$(W*P)}(_sptr) # accmulate in v∂μ; reduce at end
                     ptrv∂μ = _sptr
                 end
-                sptroff = W*P*size_T # aligned because of W
+                sptroff = W*P*size_T # aligned because of W; we only care about alignment to nearest vector width, ie, 32 bytes is fine.
             else
                 Aquote = if M isa Integer
                     ML = VectorizationBase.align(M, W)
@@ -1982,7 +1984,7 @@ end
             sptroff += VectorizationBase.align(size_T*Mk*P)
             sptroffexpr = quote end
         else# We do create a full-sized (size(A) == size(Y)) A-matrix
-            Aquote, Astride, sptroff, sptroffexpr, nonempty_sptroff_expr = allocate_fullsize_A_stackpointer!(row_increments, row_increments_rem, sptroff, config, W, Mk, Nk, invdiagL)
+            Aquote, Astride, sptroff, sptroffexpr, nonempty_sptroff_expr = allocate_fullsize_A_stackpointer!(row_increments, row_increments_rem, sptroff, config, W, Mk, Nk, invdiagLL)
         end
     end
     final_offset_expr = if nonempty_sptroff_expr
@@ -1992,13 +1994,13 @@ end
     end
     if track_L
         push!(Aquote.args, :(v∂L = StructuredMatrices.PtrLowerTriangularMatrix{$P,Vec{$W,$T},$∂LL}( $final_offset_expr )))
-    else # allocate invdiagL at the end
-        push!(Aquote.args, :(invdiag = PtrVector{$P,$T,$invdiagL}( $final_offset_expr )))
+    else # allocate invdiagLL at the end
+        push!(Aquote.args, :(invdiagL = PtrVector{$P,$T,$invdiagLL}( $final_offset_expr )))
     end        
     Aquote, Astride
 end
 function allocate_partials_no_stackpointer!(
-    row_increments, row_increments_rem, config::NormalCholeskyConfiguration{T}, W, Mk, Nk, invdiagL
+    row_increments, row_increments_rem, config::NormalCholeskyConfiguration{T}, W, Mk, Nk, invdiagLL
 ) where {T}
     @unpack M, P, track_Y, track_X, track_β, track_μ, track_L, βstride, Xstride, Ystride, μstride, μdim, sp, βdim,  XP, μtransposed, arity = config
     # Life is easier if we don't use our own stack, because
@@ -2018,7 +2020,6 @@ function allocate_partials_no_stackpointer!(
                     ∂μ = FixedSizeVector{$P,$T}(undef)
                     v∂μ = FixedSizeMatrix{$W,$P,$T,$W,$(W*P)}(undef) # accmulate in v∂μ; reduce at end
                 end
-                sptroff = W*P*size_T # aligned because of W
             else
                 Aquote = if M isa Integer
                     quote ∂μ = FixedSizeVector{$M,$T}(undef) end
@@ -2029,7 +2030,6 @@ function allocate_partials_no_stackpointer!(
             push!(Aquote.args, :(ptr∂μ = pointer(∂μ)))
             push!(Aquote.args, :(A = FixedSizeMatrix{$Mk,$P,$T,$Mk}(undef); ptrA = pointer(A)))
             Astride = Mk
-            sptroff += VectorizationBase.align(size_T*Mk*P)
         else# We do create a full-sized (size(A) == size(Y)) A-matrix
             Astride = M isa Integer ? VectorizationBase.align(M, W) : M
             # Therefore, we must increment through row iterations
@@ -2087,7 +2087,7 @@ function allocate_partials_no_stackpointer!(
 end
 
 
-@noinline function allocate_partials_quote!(row_increments, row_increments_rem, config::NormalCholeskyConfiguration{T}, W, Mk, Nk, invdiagL) where {T}
+@noinline function allocate_partials_quote!(row_increments, row_increments_rem, config::NormalCholeskyConfiguration{T}, W, Mk, Nk, invdiagLL) where {T}
     @unpack M, P, track_Y, track_X, track_β, track_μ, track_L, βstride, Xstride, Ystride, μstride, μdim, sp, βdim, XP, μtransposed, arity = config
     size_T = sizeof(T)
     array_allocations = sp ? quote _sptr = pointer(sptr,$T) end : quote end
@@ -2096,20 +2096,120 @@ end
         ∂LL = VectorizationBase.align(StructuredMatrices.binomial2(P + 1), W)
         if sp
             push!(array_allocations.args, :(∂L = StructuredMatrices.PtrLowerTriangularMatrix{$P,$T,$∂LL}(_sptr)))
-            push!(array_allocations.args, :(invdiag = PtrVector{$P,$T,$P}(_sptr)))
+            push!(array_allocations.args, :(invdiagL = PtrVector{$P,$T,$P}(_sptr)))
             push!(array_allocations.args, :(_sptr += $(VectorizationBase.align(∂LL*size_T))))
         else
             push!(array_allocations.args, :(v∂L = StructuredMatrices.MutableLowerTriangularMatrix{$P,Vec{$W,$T},$∂LL}(undef)))
             push!(array_allocations.args, :(∂L = StructuredMatrices.MutableLowerTriangularMatrix{$P,$T,$∂LL}(undef)))
-            push!(array_allocations.args, :(invdiag = PtrVector{$P,$T,$P}(pointer(∂L))))
+            push!(array_allocations.args, :(invdiagL = PtrVector{$P,$T,$P}(pointer(∂L))))
         end
     elseif !sp
-        push!(array_allocations.args, :(invdiag = FixedSizeVector{$P,$T,$invdiagL}(undef)))
+        push!(array_allocations.args, :(invdiagL = FixedSizeVector{$P,$T,$invdiagLL}(undef)))
     end
     Aquote, Astride = if sp # define sptroff, the offset of the sptr relative to the end of the last returned object (where a non-returned object would start)
-        allocate_partials_stackpointer!(row_increments, row_increments_rem, config, W, Mk, Nk, invdiagL, ∂LL)
+        allocate_partials_stackpointer!(row_increments, row_increments_rem, config, W, Mk, Nk, invdiagLL, ∂LL)
     else#if !sp
-        allocate_partials_no_stackpointer!(row_increments, row_increments_rem, config, W, Mk, Nk, invdiagL)
+        allocate_partials_no_stackpointer!(row_increments, row_increments_rem, config, W, Mk, Nk, invdiagLL)
+    end
+    push!(array_allocations.args, Aquote)
+    array_allocations, Astride
+end
+@noinline function allocate_temporaries_quote!(row_increments, row_increments_rem, config::NormalCholeskyConfiguration{T}, W, Mk, Nk, invdiagLL) where {T}
+    @unpack M, P, track_Y, track_X, track_β, track_μ, track_L, βstride, Xstride, Ystride, μstride, μdim, sp, βdim, XP, μtransposed, arity = config
+    size_T = sizeof(T)
+    array_allocations = sp ? quote _sptr = pointer(sptr,$T) end : quote end
+    #∂LL = 0
+    push!(array_allocations.args, :(invdiagL = StructuredMatrices.invdiag(L)))
+    if track_L
+        ∂LL = VectorizationBase.align(StructuredMatrices.binomial2(P + 1), W)
+        push!(array_allocations.args, :(v∂L = StructuredMatrices.MutableLowerTriangularMatrix{$P,Vec{$W,$T},$∂LL}(undef)))
+    end
+    if !(track_Y || track_μ || track_X || track_β)# don't need to track A
+        Aquote = quote
+            # A = FixedSizeMatrix{$Mk,$P}(undef)
+            A = PtrMatrix{$Mk,$P,$T,$Mk}(SIMDPirates.alloca(Val{$(Mk*P)}(), $T))
+            ptrA = pointer(A)
+        end
+        Astride = Mk
+    else # We track at least one of the four
+        if (μdim == 1) && !(track_Y || track_X || track_β) # We do not track or store all of A, so we make it a MK x P block to hold a single set of iterations across columns
+            if μtransposed
+                Aquote = quote
+                    # v∂μ = FixedSizeMatrix{$W,$P,$T,$W,$(W*P)}(undef) # accmulate in v∂μ; reduce at end
+                    v∂μ = PtrMatrix{$W,$P,$T,$W,$(W*P)}(SIMDPirates.alloca(Val{$(W*P)}(), $T)) # accmulate in v∂μ; reduce at end
+                end
+                # sptroff = W*P*size_T # aligned because of W
+            end
+            push!(Aquote.args, :(ptr∂μ = pointer(∂μ)))
+            # push!(Aquote.args, :(A = FixedSizeMatrix{$Mk,$P,$T,$Mk}(undef); ptrA = pointer(A)))
+            push!(Aquote.args, :(A = PtrMatrix{$Mk,$P,$T,$Mk}(SIMDPirates.alloca(Val{$(Mk*P)}(), $T)); ptrA = pointer(A)))
+            Astride = Mk
+        else# We do need a full-sized (size(A) == size(Y)) A-matrix
+            # Therefore, we must increment through row iterations
+            push!(row_increments.args, :(ptrA += $(size_T*Mk)))
+            push!(row_increments_rem.args, :(ptrA += $(size_T*W)))
+            
+            Astride = M isa Integer ? VectorizationBase.align(M, W) : :_A_stride_
+            Aquote = M isa Integer ? quote end : quote _A_stride_ = VectorizationBase.align($M,$W) end
+            # because either it is ∂Y, ∂μ (and size(∂μ == size(Y)), or used for calculating ∂X and/or ∂β
+            need_to_allocate_A = !track_Y && !(track_μ && μdim == 2)# &&
+            if need_to_allocate_A
+                if M isa Integer
+                    if sp && Astride * P > 100_000 # If the matrix has more than 200_000 elements, we'll use the StackPointer.
+                        push!(Aquote.args, :(A = PtrMatrix{$M,$P,$T,$Astride}(_sptr)))
+                        push!(Aquote.args, :(_sptr += $size_T*$(Astride*P)))
+                    else
+                        push!(Aquote.args, :(A = PtrMatrix{$M,$P,$T,$Astride}(SIMDPirates.alloca(Val{$(Astride*P)}(),$T))))
+                    end
+                elseif sp # If it is dynamically sized, we don't want to allocate an absurd amount of memory, so we use the StackPointer
+                    push!(Aquote.args, :(A = DynamicPtrMatrix{$T}(_sptr, ($M, $P), _A_stride_)))
+                    push!(Aquote.args, :(_sptr += $size_T*$P*_A_stride_))
+                else
+                    push!(Aquote.args, :(DynamicPaddedMatrix{$T}(undef, ($M, $P), _A_stride_)))
+                end
+                push!(Aquote.args, :(ptrA = pointer(A)))
+            elseif track_Y
+                push!(Aquote.args, :(ptrA = pointer(∂Y)))
+            else
+                push!(Aquote.args, :(ptrA = pointer(∂μ)))
+            end
+            track_X && push!(Aquote.args, :(ptr∂X = pointer(∂X)))
+            if track_μ
+                if μdim == 1
+                    if μtransposed
+                        PL = VectorizationBase.align(P, W) # align the number of columns to SIMD width
+                        # push!(Aquote.args, :(∂μ = FixedSizeVector{$P,$T}(undef)))
+                        # push!(Aquote.args, :(v∂μ = FixedSizeMatrix{$W,$P,$T,$W,$(W*P)}(undef))) # accmulate in v∂μ; reduce at end
+                        push!(Aquote.args, :(v∂μ = PtrMatrix{$W,$P,$T,$W,$(W*P)}(SIMDPirates.alloca(Val{$(W*P)}(), $T)))) # accmulate in v∂μ; reduce at end
+                        push!(Aquote.args, :(ptrv∂μ = pointer(v∂μ)))
+                    # else#if !μtransposed
+                        # if M isa Integer
+                            # push!(Aquote.args, :(∂μ = FixedSizeVector{$M,$T,$Astride}(undef)))
+                        # else#if M isa Symbol
+                            # push!(Aquote.args, :(∂μ = Vector{$T}(undef, $M)))
+                        # end
+                    end
+                # elseif track_Y# && μdim == 2
+                    # Then A = ∂Y
+                    # if M isa Integer # Y
+                        # push!(Aquote.args, :(∂μ = FixedSizeMatrix{$M,$P,$T,$Astride}(undef)))
+                    # else#if !(M isa Symbol)
+                        # push!(Aquote.args, :(∂μ = Matrix{$T}(undef,$M,$P)))
+                    # end
+                end
+                if ((μdim == 1) && !μtransposed) || ((μdim == 2) && track_Y)
+                    push!(row_increments.args, :(ptr∂μ += $(size_T*Mk)))
+                    push!(row_increments_rem.args, :(ptr∂μ += $(size_T*W)))
+                end
+                push!(Aquote.args, :(ptr∂μ = pointer(∂μ)))
+            end
+            # if track_β # we vbroadcast from β rather than load, so no point alligning columns
+                # push!(Aquote.args, :(∂β = FixedSizeMatrix{$XP,$P,$T}(undef)))
+                # if βdim == 1
+                    # push!(Aquote.args, Expr(:(=), :∂βv, :(FixedSizeVector{$XP,$T}(undef))))
+                # end
+            # end
+        end
     end
     push!(array_allocations.args, Aquote)
     array_allocations, Astride
@@ -2131,14 +2231,14 @@ end
     size_T = sizeof(T)
     loopbody = quote
         Bₚ = L[p]
-        invdiag[p] = one($T) / Bₚ
+        invdiagL[p] = one($T) / Bₚ
     end
     track_L && push!(loopbody.args, :(δ²_0 = LoopVectorization.SIMDPirates.vadd(δ²_0, SLEEFPirates.log(Bₚ))))
-    # need to allocate invdiag, ∂Y, ∂μ, ∂L, and v∂L
+    # need to allocate invdiagL, ∂Y, ∂μ, ∂L, and v∂L
     # also writing into ptrA
     # Q: do we increment ptrA alongside Y?
     # Q: if yes, is ptrA ∂Y or ∂μ ?
-    invdiagL = VectorizationBase.align(P, W)
+    invdiagLL = VectorizationBase.align(P, W)
     row_increments = quote
         ptrY += $(size_T*Mk)
     end
@@ -2156,13 +2256,16 @@ end
     track_μ && push!(return_expr.args, (!track_Y && (μdim == 2)) ? :(A') : :(∂μ'))
     track_L && push!(return_expr.args, :∂L)
     # this increments _sptr
-
-    array_allocations, Astride = allocate_partials_quote!(row_increments, row_increments_rem, config, W, Mk, Nk, invdiagL)
+    if config.allocate_partials
+        array_allocations, Astride = allocate_partials_quote!(row_increments, row_increments_rem, config, W, Mk, Nk, invdiagLL)
+    else
+        array_allocations, Astride = allocate_temporaries_quote!(row_increments, row_increments_rem, config, W, Mk, Nk, invdiagLL)
+    end
     Mk2 = min(4, M isa Symbol ? cld(Mk,W) : cld(min(Mk,M),W))
     startoffset = (total_col_iterations-1) * Nk
     loopexpr = quote
         @vvectorize $T for p ∈ 1:$P
-            $loopbody # fills out invdiag and calculates logdetL if necessary
+            $loopbody # fills out invdiagL and calculates logdetL if necessary
         end
     end
     q = quote
@@ -2174,7 +2277,7 @@ end
         ptrUtribase = pointer(L) + $(P*size_T)
         _A_offset_ = $size_T*$Astride*$startoffset
         ptrLtribase = pointer(L) + $size_T * $(P + StructuredMatrices.binomial2(startoffset) + startoffset * (P - startoffset)) # diag + triangle + subtriangle
-        ptrLdiagbase = pointer(invdiag) + $(size_T * startoffset)
+        ptrLdiagbase = pointer(invdiagL) + $(size_T * startoffset)
     end
     # Workaround for Vec alignment issue
     # If M isa Symbol, the inline will be added by the func calling this one.
@@ -2234,18 +2337,18 @@ end
         if n_row_reps > 1
             row_loops = quote
                 for rrep ∈ 1:$n_row_reps
-                    ptrUdiag = pointer(invdiag); ptrUtri = ptrUtribase
+                    ptrUdiag = pointer(invdiagL); ptrUtri = ptrUtribase
                     $row_iter
                     $row_increments
                 end
             end
             push!(q.args, row_loops)
         else
-            push!(q.args, :(ptrUdiag = pointer(invdiag); ptrUtri = ptrUtribase))
+            push!(q.args, :(ptrUdiag = pointer(invdiagL); ptrUtri = ptrUtribase))
             push!(q.args, row_iter)
         end
         if row_rem > 0 && n_row_reps > 0
-            push!(q.args, :(ptrUdiag = pointer(invdiag); ptrUtri = ptrUtribase))
+            push!(q.args, :(ptrUdiag = pointer(invdiagL); ptrUtri = ptrUtribase))
             push!(q.args,
                   ∂mutlivariate_normal_SMLT_rowiter(
                       row_rem, Nk, col_rem, T, Ystride, n_col_reps, μdim, μstride,
@@ -2271,18 +2374,18 @@ end
         row_loops = quote
             Mkrep, Mkrem = divrem($M, $Mk)
             for rrep ∈ 1:Mkrep
-                ptrUdiag = pointer(invdiag); ptrUtri = ptrUtribase
+                ptrUdiag = pointer(invdiagL); ptrUtri = ptrUtribase
                 $row_iter
                 $row_increments
             end
             for rrep ∈ 1:Mkrem >>> $(VectorizationBase.intlog2(W))
-                ptrUdiag = pointer(invdiag); ptrUtri = ptrUtribase
+                ptrUdiag = pointer(invdiagL); ptrUtri = ptrUtribase
                 $row_iter_onevec
                 $row_increments_rem
             end
             row_rem_final = Mkrem & $Wm1
             if row_rem_final != 0
-                ptrUdiag = pointer(invdiag); ptrUtri = ptrUtribase
+                ptrUdiag = pointer(invdiagL); ptrUtri = ptrUtribase
                 __mask__ = VectorizationBase.mask($T, row_rem_final)
                 $row_iter_onevecmask
             end
