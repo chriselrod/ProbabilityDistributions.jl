@@ -100,8 +100,8 @@ function Bernoulli_logit_quote(T)
 end
 
 @generated function Bernoulli_logit(
-    y::BitVector, α::AbstractVector{T},
-    ::Val{track} = Val{(false,true)}()
+    ::Val{track} = Val{(false,true)}(),
+    y::BitVector, α::AbstractVector{T}
 ) where {T, track}
     y_is_param, α_is_param = track
     @assert y_is_param == false
@@ -147,7 +147,11 @@ function ∂Bernoulli_logit(y::BitVector, α::AbstractVector{T}, ::Val{track} = 
         return Bernoulli_logit(y, α)
     end
 end
-function ∂Bernoulli_logit(sptr::StackPointer, y::BitVector, α::AbstractVector{T}, ::Val{track} = Val{(false,true)}()) where {T,track}
+
+function ∂Bernoulli_logit(
+    sptr::StackPointer, ::Val{track},# = Val{(false,true)}(),
+    y::BitVector, α::AbstractVector{T}
+) where {T,track}
     y_is_param, α_is_param = track
     @assert y_is_param == false
     if α_is_param
@@ -156,6 +160,11 @@ function ∂Bernoulli_logit(sptr::StackPointer, y::BitVector, α::AbstractVector
     else
         return sptr, Bernoulli_logit(y, α)
     end
+end
+function ∂Bernoulli_logit(
+        sptr::StackPointer, y::BitVector, α::AbstractVector{T}
+) where {T}
+    ∂Bernoulli_logit(sptr, Val{(false,true)}(), y, α)
 end
 push!(DISTRIBUTION_DIFF_RULES, :Bernoulli_logit)
 
@@ -176,8 +185,8 @@ function Binomial_logit_quote(T, yconst::Bool = false)
 end
 
 @generated function Binomial_logit(
-    s::AbstractVector{T}, α::AbstractVector{T}, N::AbstractVector{T},
-    ::Val{track} = Val{(false,true,false)}()
+    ::Val{track},
+    s::AbstractVector{T}, α::AbstractVector{T}, N::AbstractVector{T}    
 ) where {track, T}
     s_is_param, α_is_param, N_is_param = track
     @assert !s_is_param && !N_is_param
@@ -185,12 +194,17 @@ end
 end
 
 @generated function Binomial_logit(
-    s::AbstractVector{T}, α::AbstractVector{T}, N::T,
-    ::Val{track} = Val{(false,true,false)}()
+    ::Val{track},
+    s::AbstractVector{T}, α::AbstractVector{T}, N::T
 ) where {track, T}
     s_is_param, α_is_param, N_is_param = track
     @assert !s_is_param && !N_is_param
     Binomial_logit_quote(T, true)
+end
+@generated function Binomial_logit(
+    s::AbstractVector{T}, α::AbstractVector{T}, N::Union{T,<: AbstractVector{T}}
+) where {track, T}
+    Binomial_logit(Val{(false,true,false)}(), s, α, N)
 end
 
 # faster, works for Floats that can't be convered to Int
@@ -198,8 +212,7 @@ end
 # more accurate, but doesn't allow n or p to have decimals.
 lbinom(n, p) = first(logabsbinomial(trunc(Int,n), trunc(Int,p))) 
 function Binomial_logit_constant(
-    s::AbstractVector{T}, α::AbstractVector{T}, N::AbstractVector{T},
-    ::Val{track} = Val{(false,true,false)}()
+    ::Val{track}, s::AbstractVector{T}, α::AbstractVector{T}, N::AbstractVector{T}
 ) where {track,T}
     c = zero(T)
     @inbounds for i ∈ eachindex(s, N)
@@ -208,14 +221,18 @@ function Binomial_logit_constant(
     c
 end
 function Binomial_logit_constant(
-    s::AbstractVector{T}, α::AbstractVector{T}, N::T,
-    ::Val{track} = Val{(false,true,false)}()
+    ::Val{track}, s::AbstractVector{T}, α::AbstractVector{T}, N::T
 ) where {track,T}
     c = zero(T)
     @inbounds for i ∈ eachindex(s)
         c += lbinom(N,s[i])
     end
     c
+end
+function Binomial_logit_constant(
+    s::AbstractVector{T}, α::AbstractVector{T}, N::Union{T,<:AbstractVector{T}}    
+) where {track,T}
+    Binomial_logit_constant(Val{(false,true,false)}(), s, α, N)
 end
 
 function ∂Binomial_logit_quote(T, nconst::Bool = false, initialized::Bool = false)
@@ -252,9 +269,9 @@ end
     ∂Binomial_logit_quote(T, true, isinitialized(∂Α))
 end
 
+ #    ::Val{track} = Val{(false,true,false)}()
 function ∂Binomial_logit(
-    s::AbstractVector{T}, α::AbstractVector{T}, N::Union{T,AbstractVector{T}},
-    ::Val{track} = Val{(false,true,false)}()
+    ::Val{track}, s::AbstractVector{T}, α::AbstractVector{T}, N::Union{T,AbstractVector{T}}
 ) where {T,track}
     s_is_param, α_is_param, N_is_param = track
     @assert !s_is_param && !N_is_param
@@ -265,9 +282,9 @@ function ∂Binomial_logit(
         return Binomial_logit(s, α, N)
     end
 end
+#::Val{track} = Val{(false,true,false)}()
 function ∂Binomial_logit(
-    sptr::StackPointer, s::AbstractVector{T}, α::AbstractVector{T}, N::Union{T,AbstractVector{T}},
-    ::Val{track} = Val{(false,true,false)}()
+    sptr::StackPointer, ::Val{track}, s::AbstractVector{T}, α::AbstractVector{T}, N::Union{T,AbstractVector{T}}
 ) where {T,track}
     s_is_param, α_is_param, N_is_param = track
     @assert !s_is_param && !N_is_param
@@ -281,10 +298,9 @@ end
 
 push!(DISTRIBUTION_DIFF_RULES, :Binomial_logit)
 
-
+#::Val{track} = Val{(false,false,true,true)}()
 @generated function Bernoulli_logit_fmadd(
-    y::BitVector, X::AbstractMatrix{T}, β::AbstractVector{T}, α::AbstractFloat,
-    ::Val{track} = Val{(false,false,true,true)}()
+    ::Val{track}, y::BitVector, X::AbstractMatrix{T}, β::AbstractVector{T}, α::AbstractFloat
 ) where {T, track}
     y_is_param, β_is_param, X_is_param, α_is_param = track
     @assert y_is_param == false
@@ -408,7 +424,7 @@ end
 
 push!(DISTRIBUTION_DIFF_RULES, :Bernoulli_logit_fmadd)
 
-@generated function LKJ(L::AbstractCorrCholesky{N,T}, η::T, ::Val{track}) where {N,T,track}
+@generated function LKJ(::Val{track}, L::AbstractCorrCholesky{N,T}, η::T) where {N,T,track}
     W = VectorizationBase.pick_vector_width(N-1,T)
     # If the remainder is 1, we'll skip the first element (which equals 1, so the log is 0)
     # otherwise, we wont skip, because memory should be aligned with accessing the first element.
@@ -540,7 +556,7 @@ end
     end
     simplify_expr(q)
 end
-@generated function ∂LKJ(sp::PaddedMatrices.StackPointer, L::AbstractLKJCorrCholesky{N,T}, η::T, ::Val{track}) where {N,T,track}
+@generated function ∂LKJ(sp::PaddedMatrices.StackPointer, ::Val{track}, L::AbstractLKJCorrCholesky{N,T}, η::T) where {N,T,track}
     track_L, track_η = track
     q = quote end
     ret_expr = Expr(:tuple, :target)
@@ -813,10 +829,10 @@ end
 
 # α * log(β) + (α-1) * log(y) - β*y - lgamma(α)
 @generated function Gamma(
+    ::Val{track},
     y::PaddedMatrices.AbstractFixedSizeVector{M,T},
     α::Union{T, <: PaddedMatrices.AbstractFixedSizeVector{M,T}},
-    β::Union{T, <: PaddedMatrices.AbstractFixedSizeVector{M,T}},
-    ::Val{track}
+    β::Union{T, <: PaddedMatrices.AbstractFixedSizeVector{M,T}}
 ) where {track,M,T}
 #) where {track,T,M}
     αisvec = isa(α, PaddedMatrices.AbstractFixedSizeVector)
@@ -847,10 +863,10 @@ end
 end
 
 @generated function ∂Gamma(
+    ::Val{track},
     y::PaddedMatrices.AbstractFixedSizeVector{M,T},
     α::Union{T,<:PaddedMatrices.AbstractFixedSizeVector{M,T}},
-    β::Union{T,<:PaddedMatrices.AbstractFixedSizeVector{M,T}},
-    ::Val{track}
+    β::Union{T,<:PaddedMatrices.AbstractFixedSizeVector{M,T}}
 #) where {track,M,T}
 ) where {track,T,M}
     αisvec = isa(α, PaddedMatrices.AbstractFixedSizeVector)
@@ -859,23 +875,23 @@ end
 end
 @generated function ∂Gamma(
     sp::StackPointer,
+    ::Val{track},
     y::PaddedMatrices.AbstractFixedSizeVector{M,T},
     α::Union{T,<:PaddedMatrices.AbstractFixedSizeVector{M,T}},
-    β::Union{T,<:PaddedMatrices.AbstractFixedSizeVector{M,T}},
-    ::Val{track}
+    β::Union{T,<:PaddedMatrices.AbstractFixedSizeVector{M,T}}
 ) where {track,M,T}
             # ::Val{track}) where {track,T,M}
     αisvec = isa(α, PaddedMatrices.AbstractFixedSizeVector)
     βisvec = isa(β, PaddedMatrices.AbstractFixedSizeVector)
     gamma_alloc_quote(M, T, (true, αisvec, βisvec), track, true)
 end
-@generated function Gamma(y::T, α::T, β::T, ::Val{track}) where {track,T <: Real}
+@generated function Gamma(::Val{track}, y::T, α::T, β::T) where {track,T <: Real}
     gamma_quote(1, T, (false, false, false), track, false)
 end
-@generated function ∂Gamma(y::T, α::T, β::T, ::Val{track}) where {track,T <: Real}
+@generated function ∂Gamma(::Val{track}, y::T, α::T, β::T) where {track,T <: Real}
     gamma_alloc_quote(1, T, (false, false, false), track, false)
 end
-@generated function ∂Gamma(sp::StackPointer, y::T, α::T, β::T, ::Val{track}) where {track,T <: Real}
+@generated function ∂Gamma(sp::StackPointer, ::Val{track}, y::T, α::T, β::T) where {track,T <: Real}
     gamma_alloc_quote(1, T, (false, false, false), track, true)
 end
 
@@ -1138,11 +1154,11 @@ end
 
 # α * log(β) + (α-1) * log(y) - β*y - lgamma(α)
 @generated function Beta(
+    ::Val{track},
     y::PaddedMatrices.AbstractFixedSizeVector{M,T},
     α::Union{T,Int,<:PaddedMatrices.AbstractFixedSizeVector{M,T}},
-    β::Union{T,Int,<:PaddedMatrices.AbstractFixedSizeVector{M,T}},
+    β::Union{T,Int,<:PaddedMatrices.AbstractFixedSizeVector{M,T}}
             # ::Val{track}) where {track,T,M}
-    ::Val{track}
 ) where {track,M,T}
     αisvec = isa(α, PaddedMatrices.AbstractFixedSizeVector)
     βisvec = isa(β, PaddedMatrices.AbstractFixedSizeVector)
@@ -1168,10 +1184,11 @@ end
     )
 end
 @generated function ∂Beta(
-            y::PaddedMatrices.AbstractFixedSizeVector{M,T},
-            α::Union{T,Int,<:PaddedMatrices.AbstractFixedSizeVector{M,T}},
-            β::Union{T,Int,<:PaddedMatrices.AbstractFixedSizeVector{M,T}},
-            ::Val{track}) where {track,M,T}
+    ::Val{track},
+    y::PaddedMatrices.AbstractFixedSizeVector{M,T},
+    α::Union{T,Int,<:PaddedMatrices.AbstractFixedSizeVector{M,T}},
+    β::Union{T,Int,<:PaddedMatrices.AbstractFixedSizeVector{M,T}}
+) where {track,M,T}
             # ::Val{track}) where {track,T,M}
     αisvec = isa(α, PaddedMatrices.AbstractFixedSizeVector)
     βisvec = isa(β, PaddedMatrices.AbstractFixedSizeVector)
@@ -1179,20 +1196,20 @@ end
 end
 @generated function ∂Beta(
     sp::StackPointer,
+    ::Val{track},
     y::PaddedMatrices.AbstractFixedSizeVector{M,T},
     α::Union{T,Int,<:PaddedMatrices.AbstractFixedSizeVector{M,T}},
-    β::Union{T,Int,<:PaddedMatrices.AbstractFixedSizeVector{M,T}},
-    ::Val{track}
+    β::Union{T,Int,<:PaddedMatrices.AbstractFixedSizeVector{M,T}}
 ) where {track,M,T}
 # ) where {track,T,M}
     αisvec = isa(α, PaddedMatrices.AbstractFixedSizeVector)
     βisvec = isa(β, PaddedMatrices.AbstractFixedSizeVector)
     beta_quote(M, T, (true, αisvec, βisvec), track, true)
 end
-@generated function Beta(y::T, α::Union{T,Int}, β::Union{T,Int}, ::Val{track}) where {T <: Real,track}
+@generated function Beta(::Val{track}, y::T, α::Union{T,Int}, β::Union{T,Int}) where {T <: Real,track}
     beta_quote(1, T, (false, false, false), track, false)
 end
-@generated function ∂Beta(y::T, α::Union{T,Int}, β::Union{T,Int}, ::Val{track}) where {track,T <: Real}
+@generated function ∂Beta(::Val{track}, y::T, α::Union{T,Int}, β::Union{T,Int}) where {track,T <: Real}
     beta_quote(1, T, (false, false, false), track, true)
 end
 push!(DISTRIBUTION_DIFF_RULES, :Beta)
@@ -1294,7 +1311,7 @@ function lsgg_alloc_quote(
     end
 end
 
-@generated function lsgg(y::AbstractFixedSizeVector{M,T}, α, ϕ, δ, σ, ::Val{track}) where {M,T,track}
+@generated function lsgg(::Val{track}, y::AbstractFixedSizeVector{M,T}, α, ϕ, δ, σ) where {M,T,track}
     lsgg_quote(
         M, T, (true,
         α <: AbstractArray,
@@ -1319,7 +1336,7 @@ end
        M, T, (yisvec, αisvec, ϕisvec, δisvec, σisvec), track, init, true
     )
 end
-@generated function ∂lsgg(y::AbstractFixedSizeVector{M,T}, α, ϕ, δ, σ, ::Val{track}) where {M,T,track}
+@generated function ∂lsgg(::Val{track}, y::AbstractFixedSizeVector{M,T}, α, ϕ, δ, σ) where {M,T,track}
     lsgg_alloc_quote(
         M, T, (true,
         α <: AbstractArray,
@@ -1329,7 +1346,7 @@ end
         track, false
     )
 end
-@generated function ∂lsgg(sp::StackPointer, y::AbstractFixedSizeVector{M,T}, α, ϕ, δ, σ, ::Val{track}) where {M,T,track}
+@generated function ∂lsgg(sp::StackPointer, ::Val{track}, y::AbstractFixedSizeVector{M,T}, α, ϕ, δ, σ) where {M,T,track}
     lsgg_alloc_quote(
         M, T, (true,
         α <: AbstractArray,
@@ -1339,7 +1356,7 @@ end
         track, true
     )
 end
-@generated function lsgg(y::T, α, ϕ, δ, σ, ::Val{track}) where {T<:Real,track}
+@generated function lsgg(::Val{track}, y::T, α, ϕ, δ, σ) where {T<:Real,track}
     @assert !any((
         α <: AbstractArray,
         ϕ <: AbstractArray,
@@ -1366,7 +1383,7 @@ end
         track, (!isinitialized(T),false,false,false,false), true
     )
 end
-@generated function ∂lsgg(y::T, α, ϕ, δ, σ, ::Val{track}) where {T<:Real,track}
+@generated function ∂lsgg(::Val{track}, y::T, α, ϕ, δ, σ) where {T<:Real,track}
     @assert !any((
         α <: AbstractArray,
         ϕ <: AbstractArray,
@@ -1377,7 +1394,7 @@ end
         1, T, (false,false,false,false,false), track, false
     )
 end
-@generated function ∂lsgg(sp::StackPointer, y::T, α, ϕ, δ, σ, ::Val{track}) where {T,track}
+@generated function ∂lsgg(sp::StackPointer, ::Val{track}, y::T, α, ϕ, δ, σ) where {T,track}
     @assert !any((
         α <: AbstractArray,
         ϕ <: AbstractArray,
@@ -1395,10 +1412,11 @@ emax(a, em, ed50) = em * a / (a + ed50)
 emaxi(a, em, ed50) = @fastmath a * em * ed50 / (1 + ed50 * a)
 emaxn(a, em, ed50) = @fastmath a*em*ed50 / (a + ed50)
 normal_lpdf(y, μ, nhτ, nlogrootτ) = nhτ * abs2(y-μ) - nlogrootτ
+
+# Val{(true,true,true,true,true,false,false)}()
 @generated function EₘₐₓNMA(
-    α::AbstractVector{T}, σᵤ::T, Eₘₐₓ::AbstractVector{T}, ED₅₀::AbstractVector{T}, σ::T,
-    Treatments::StructuredMatrices.FixedSizeRaggedMatrix{M,N,P,<:Integer,<:Integer}, dose::AbstractVector{T},
-    ::Val{track} = Val{(true,true,true,true,true,false,false)}()
+    ::Val{track}, α::AbstractVector{T}, σᵤ::T, Eₘₐₓ::AbstractVector{T}, ED₅₀::AbstractVector{T}, σ::T,
+    Treatments::StructuredMatrices.FixedSizeRaggedMatrix{M,N,P,<:Integer,<:Integer}, dose::AbstractVector{T}
 ) where {T, track, M, N, P}
     track_α, track_σᵤ, track_Eₘₐₓ, track_ED₅₀, track_σ, track_treat, track_dose = track
     @assert track_treat == false && track_dose == false
@@ -1603,10 +1621,10 @@ end
         target
     end
 end
+# Val{(true,true,true,true,false,false)}()
 @generated function ∂EₘₐₓNMA(
-    sp::StackPointer, α::AbstractVector{T}, σᵤ::T, Eₘₐₓ::AbstractFixedSizeVector{C,T}, ED₅₀::AbstractFixedSizeVector{C,T}, σ::T,
-    treatments::StructuredMatrices.FixedSizeRaggedMatrix{M,N,P,<:Integer,<:Integer}, dose::AbstractVector{T},
-    ::Val{track} = Val{(true,true,true,true,false,false)}()
+    sp::StackPointer, ::Val{track}, α::AbstractVector{T}, σᵤ::T, Eₘₐₓ::AbstractFixedSizeVector{C,T}, ED₅₀::AbstractFixedSizeVector{C,T}, σ::T,
+    treatments::StructuredMatrices.FixedSizeRaggedMatrix{M,N,P,<:Integer,<:Integer}, dose::AbstractVector{T}
 ) where {T,C,M,N,P,track}
     padM = PaddedMatrices.calc_padding(M-1, T)
     W, Wshift = VectorizationBase.pick_vector_width_shift(M-1)

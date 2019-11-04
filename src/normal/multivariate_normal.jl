@@ -1613,6 +1613,13 @@ end
         end
     elseif μdim == 2 # if ∂μ is not aliasing A, we need to store.
         need_to_store = if track_Y
+            if initY # A aliases ∂Y, so we need to store ∂μ
+                true
+            elseif track_Xβ && !initμ # separate A allocated for calculating ∂X and/or ∂β
+                true
+            else
+                false
+            end
             if !initY && initμ
                 false # ∂μ aliases A
             else # if initY, ∂Y aliases A, if !initY but initμ, A is allocated separately.
@@ -1620,7 +1627,7 @@ end
             end
         else
             if track_Xβ
-                initμ # if initμ, we allocate A separately so that it can be used to caclulate ∂X and/or ∂β
+                !initμ # if initμ, we allocate A separately so that it can be used to caclulate ∂X and/or ∂β
             else
                 false
             end
@@ -1654,15 +1661,39 @@ Sets pointers back columns during the reverse pass over rows.
     loop_ptr_increments
 end
 
+function increment_A_store(track_Y, track_fsμ, track_Xβ, initY, initμ)
+    if track_Xβ
+        false
+    else
+        if track_Y
+            if initY
+                false
+            else
+                if track_fsμ
+                    #∂μ
+                    !initμ
+                else
+                    #∂Y
+                    true
+                end
+            end
+        elseif track_fsμ# and not track_Y
+            # A = ∂μ
+            !initμ
+        else
+            false
+        end
+    end
+end
+
 @noinline function ∂mutlivariate_normal_SMLT_rowiter(
-    Mk::Union{Int,Symbol}, Nk::Int, col_rem::Int, T::DataType, Ystride::Union{Int,Symbol},
-    n_col_reps::Int, μdim::Int, μstride::Union{Int,Symbol}, track::NTuple{5,Bool},
-    μmy::Bool, μsym::Symbol = :μptr,
-    Astride::Union{Int,Symbol} = Ystride, XP::Int = -1, βstride::Int=-1,
-    Xstride::Union{Int,Symbol} = -1, βdim::Int = -1, μtransposed::Bool = false,
-    initY::Bool = true, initX::Bool = true, initβ::Bool = true, initμ::Bool = true, initL::Bool = true
-)
-    track_Y, track_X, track_β, track_μ, track_L = track
+    config::NormalCholeskyConfiguration{T},
+    Mk::Union{Int,Symbol}, Nk::Int, col_rem::Int,
+    n_col_reps::Int, μmy::Bool, μsym::Symbol = :μptr,
+    Astride::Union{Int,Symbol} = Ystride
+) where {T}
+    @unpack track_Y, track_X, track_β, track_μ, track_L, βstride, Xstride, Ystride, μstride, μdim, βdim, XP, μtransposed = config
+    @unpack initY, initX, initβ, initμ = config
     track_Xβ = track_X | track_β
     track_fsμ = track_μ & (μdim == 2)
     if Mk isa Int
@@ -1751,12 +1782,13 @@ end
     if track_L
         push!(row_iter.args, :(ptrv∂Ltri = ptrv∂Ltribase; ptrv∂Ldiag = ptrv∂Ldiagbase))
     end
-    store_Y = track_Y && !initY && (track_fsμ | track_Xβ)
+    store_Y = track_Y && !(!initY && (track_fsμ | track_Xβ))
+    increment_store = increment_A_store(track_Y, track_fsμ, track_Xβ, initY, initμ)
     if col_rem > 0
         row_iter_rev = StructuredMatrices.A_rdiv_L_kernel_quote(
             Mk, col_rem, col_rem, T, Astride, Astride, false, true,
             Bsym = :ptrA_rev, Asym = :ptrA_rev, Ltrisym = :ptrLtri, Ldiagsym = :ptrLdiag,
-            loadB = true, storeA = true, calc_product = track_L ? N : 0
+            loadB = true, storeA = true, calc_product = track_L ? N : 0, increment_store = increment_store
         )
         fullcols = Nk * n_col_reps
         # handle following in A_rdiv_L_quote
@@ -1775,7 +1807,7 @@ end
         iterquote = StructuredMatrices.A_rdiv_L_kernel_quote(
             Mk, Nk, :K, T, Astride, Astride, false, true,
             Bsym = :ptrA_rev, Asym = :ptrA_rev, Ltrisym = :ptrLtri, Ldiagsym = :ptrLdiag,
-            loadB = true, storeA = true, calc_product = track_L ? N : 0
+            loadB = true, storeA = true, calc_product = track_L ? N : 0, increment_store = increment_store
         )
         if col_rem == 0 && !μtransposed && track_μ # then we need to zero-initialize these rows before entering the loop
             Riter = Mk >>> Wshift
@@ -1801,7 +1833,7 @@ end
         row_iter_rev_single = StructuredMatrices.A_rdiv_L_kernel_quote(
             Mk, Nk, N, T, Astride, Astride, false, true,
             Bsym = :ptrA_rev, Asym = :ptrA_rev, Ltrisym = :ptrLtri, Ldiagsym = :ptrLdiag,
-            loadB = true, storeA = store_A, calc_product = track_L ? N : 0
+            loadB = true, storeA = store_A, calc_product = track_L ? N : 0, increment_store = increment_store
         )
         push!(row_iter.args, row_iter_rev_single)
         track_μ && push!(row_iter.args, track_mu_store(Mk,Nk,T,μdim,μmy,W,Wshift,μstride,track_Y,μtransposed,col_rem == 0,initμ,initY,track_Xβ))
@@ -2182,12 +2214,9 @@ end
                     Aquote, Astride = sym_aliases_A!(row_increments, row_increments_rem, :∂Y, size_T, M, Mk, P, W, sp)
                     A_aliases_Y = true
                 else#if !initY
-                    if initμ
-                        Aquote, Astride = sym_aliases_A!(row_increments, row_increments_rem, :∂μ, size_T, M, Mk, P, W, sp)
-                        A_aliases_μ = true
-                    else
-                        Aquote, Astride = alloc_A_kernel(Mk, P, T)
-                    end
+                    # if initμ
+                    Aquote, Astride = sym_aliases_A!(row_increments, row_increments_rem, :∂μ, size_T, M, Mk, P, W, sp)
+                    A_aliases_μ = true
                 end
             end
         else#if !track_fsμ
@@ -2266,6 +2295,7 @@ end
     config::NormalCholeskyConfiguration{T}
 ) where {T}
     @unpack M, P, track_Y, track_X, track_β, track_μ, track_L, βstride, Xstride, Ystride, μstride, μdim, sp, βdim,  XP, μtransposed, arity, allocate_partials, calclogdet, cachedchol = config
+    @unpack initY, initX, initβ, initμ = config
     maxM = M isa Symbol ? typemax(Int) : M
     W, Mk, Nk = StructuredMatrices.div_ul_blocking_structure(maxM, P, T)
     V = Vec{W,T}
@@ -2380,7 +2410,7 @@ end
         total_row_iterations = n_row_reps + (row_rem > 0)
         Mk1 = n_row_reps == 0 ? row_rem : Mk
         row_iter = ∂mutlivariate_normal_SMLT_rowiter(
-            Mk1, Nk, col_rem, T, Ystride, n_col_reps, μdim, μstride, track, μmy, :ptrμ, Astride, XP, βstride, Xstride, βdim, μtransposed
+            config, Mk1, Nk, col_rem, n_col_reps, μmy, :ptrμ, Astride
         )
         if n_row_reps > 1
             row_loops = quote
@@ -2399,25 +2429,21 @@ end
             push!(q.args, :(ptrUdiag = pointer(invdiagL); ptrUtri = ptrUtribase))
             push!(q.args,
                   ∂mutlivariate_normal_SMLT_rowiter(
-                      row_rem, Nk, col_rem, T, Ystride, n_col_reps, μdim, μstride,
-                      track, μmy, :ptrμ, Astride, XP, βstride, Xstride, βdim, μtransposed
+                      config, row_rem, Nk, col_rem, n_col_reps, μmy, :ptrμ, Astride
                   )
             )
         end
     else # Unknown number of iterations.
         row_iter = ∂mutlivariate_normal_SMLT_rowiter(
-            Mk, Nk, col_rem, T, Ystride, n_col_reps, μdim, μstride, track, μmy,
-            :ptrμ, Astride, XP, βstride, Xstride, βdim, μtransposed
+            config, Mk, Nk, col_rem, n_col_reps, μmy, :ptrμ, Astride
         )
         Wrem, Mkrem, Nkrem = StructuredMatrices.div_triangle_blocking_structure(W, P, T)
         n_col_repsrem, col_remrem = divrem(P, Nkrem)
         row_iter_onevec = ∂mutlivariate_normal_SMLT_rowiter(
-            W, Nkrem, col_remrem, T, Ystride, n_col_repsrem, μdim, μstride, track, μmy,
-            :ptrμ, Astride, XP, βstride, Xstride, βdim, μtransposed
+            config, W, Nkrem, col_remrem, n_col_repsrem, μmy, :ptrμ, Astride
         )
         row_iter_onevecmask = ∂mutlivariate_normal_SMLT_rowiter(
-            :row_rem_final, Nkrem, col_remrem, T, Ystride, n_col_repsrem, μdim, μstride, track, μmy,
-            :ptrμ, Astride, XP, βstride, Xstride, βdim, μtransposed
+            config, :row_rem_final, Nkrem, col_remrem, n_col_repsrem, μmy, :ptrμ, Astride
         )
         row_loops = quote
             Mkrep, Mkrem = divrem($M, $Mk)
@@ -2456,51 +2482,54 @@ end
     push!(q.args, Expr(:(=), :δ²_0, :(SIMDPirates.vmul(SIMDPirates.vbroadcast($V, $(T(-0.5))), δ²_0))))
     if track_L
         loopheader = quote ptrv∂L = pointer(v∂L); ptr∂L = pointer(∂L) end
-        loop1body = quote
-            VectorizationBase.store!(
-                ptr∂L + p*$size_T,
-                Base.FastMath.sub_fast(
+        if calclogdet
+            vsumexpr = :(Base.FastMath.sub_fast(
                     SIMDPirates.vsum(SIMDPirates.vload($V, ptrv∂L + p*$(W*size_T))),
                     Base.FastMath.mul_fast(
                         $(M isa Symbol ? :($T($M)) : T(M)),
                         VectorizationBase.load(ptr∂L + p*$size_T))
-                )
-            )
-        end
-        if track_μ && μdim == 1 && μtransposed
-            push!(loopheader.args, :(ptr∂μ = pointer(∂μ); ptrv∂μ = pointer(v∂μ)))
-            if initμ
-                push!(loop1body.args, :(VectorizationBase.store!(
-                    ptr∂μ + p*$size_T, SIMDPirates.vsum(SIMDPirates.vload($V, ptrv∂μ + p*$(W*size_T)))
-                )))
-            else
-                push!(loop1body.args, :(VectorizationBase.store!(
-                    ptr∂μ + p*$size_T, Base.FastMath.add_fast(load(ptr∂μ + p*$size_T), SIMDPirates.vsum(SIMDPirates.vload($V, ptrv∂μ + p*$(W*size_T))))
-                )))
+            ))
+            if !initL
+                vsumexpr = :(Base.FastMath.add_fast(VectorizationBase.load(ptr∂L + p*$size_T,), $vsumexpr))
             end
-        end
-        rem_body = if initL
-            :(SIMDPirates.vsum(SIMDPirates.vload($V, ptrv∂L + p*$(W*size_T))))
+            loop1body = quote
+                VectorizationBase.store!(
+                    ptr∂L + p*$size_T, $vsumexpr
+                )
+            end
+            if track_μ && μdim == 1 && μtransposed
+                push!(loopheader.args, :(ptr∂μ = pointer(∂μ); ptrv∂μ = pointer(v∂μ)))
+                if initμ
+                    push!(loop1body.args, :(VectorizationBase.store!(
+                        ptr∂μ + p*$size_T, SIMDPirates.vsum(SIMDPirates.vload($V, ptrv∂μ + p*$(W*size_T)))
+                    )))
+                else
+                    push!(loop1body.args, :(VectorizationBase.store!(
+                        ptr∂μ + p*$size_T, Base.FastMath.add_fast(load(ptr∂μ + p*$size_T), SIMDPirates.vsum(SIMDPirates.vload($V, ptrv∂μ + p*$(W*size_T))))
+                    )))
+                end
+            end
+            push!(loopheader.args, :(for p in 0:$(P-1); $loop1body; end))
+            remloopstart = P
         else
-            :(Base.FastMath.add_fast(load(ptr∂L + p*$size_T), SIMDPirates.vsum(SIMDPirates.vload($V, ptrv∂L + p*$(W*size_T)))))
+            remloopstart = 0
+        end # Consider using gathers and vload/stores
+        rem_body = :(SIMDPirates.vsum(SIMDPirates.vload($V, ptrv∂L + p*$(W*size_T))))
+        if initL
+            rem_body = :(Base.FastMath.add_fast(load(ptr∂L + p*$size_T), $rem_body))
         end
         vsum_L_expr = quote
             $loopheader    
-            for p in 0:$(P-1)
-                $loop1body
-#                ∂L[p] = SIMDPirates.vsum(v∂L[p]) - ∂L[p]# subtract inverse diag of L
-            end
-            for p in $(P):$(StructuredMatrices.binomial2(P+1)-1)
+            for p in $remloopstart:$(StructuredMatrices.binomial2(P+1)-1)
                 VectorizationBase.store!(
                     ptr∂L + p*$size_T, $rem_body
                 )
-#                ∂L[p] = SIMDPirates.vsum(v∂L[p])
             end
         end
         push!(q.args, vsum_L_expr)
     end
     if track_μ
-        if μdim == 1 && μtransposed && !track_L
+        if μdim == 1 && μtransposed && !(track_L && calclogdet)
             if initμ
                 vsum_mu_expr = quote
                     ptr∂μ = pointer(∂μ); ptrv∂μ = pointer(v∂μ)
@@ -2556,7 +2585,7 @@ end
         if config.allocate_partials
             push!(q.args, :(PaddedMatrices.StackPointer(_sptr),$return_expr))
         else
-            push!(q.args, :(sp, δ²_0))
+            push!(q.args, :((sp, δ²_0)))
         end
     else
         if config.allocate_partials
