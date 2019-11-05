@@ -13,6 +13,7 @@ using ScatteredArrays: AbstractScatteredArray
 using StructuredMatrices: AbstractAutoregressiveMatrix, AbstractLowerTriangularMatrix
 using DistributionParameters: AbstractCorrCholesky, AbstractCovarCholesky, AbstractFixedSizeCovarianceMatrix
 using VectorizationBase: pick_vector_width, pick_vector_width_shift
+using MacroTools: postwalk
 
 function return_expression(return_expr)
     length(return_expr.args) == 1 ? return_expr.args[1] : return_expr

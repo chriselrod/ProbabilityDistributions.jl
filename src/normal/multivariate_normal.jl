@@ -1137,46 +1137,59 @@ end
     # q
 end
 
-function modify_args!(args, whereargs, track, sp, trackval)
+typeset!(s::Set{Symbol}, sym::Symbol) = push!(s, sym)
+function typeset!(s::Set{Symbol}, arg::Expr)
+    s = Set{Symbol}()
+    postwalk(arg) do ex
+        if ex isa Expr && ex.head === :curly
+            for i ∈ 2:length(ex.args)
+                push!(s, ex.args[i])
+            end
+        end
+        ex
+    end
+    s
+end
+calc_whereset(args::Vector{Expr}) = (s = Set{Symbol}(); foreach(arg -> typeset!(s, arg), args); s)
+function modify_args!(args, sp, trackval)
+    whereargs = calc_whereset(args)
     if trackval
-        pushfirst!(args, :(Val{$track}()))
+        pushfirst!(args, :(::Val{track}))
         track_ret = :track
         push!(whereargs, :track)
     else
-        track_ret = track
+        track_ret = Expr(:tuple, [true for i ∈ 1:length(args)]...)
     end
     if sp
-        pushfirst!(whereargs, :(sptr::StackPointer))
+        pushfirst!(args, :(sptr::StackPointer))
     end
-    track_ret
+    track_ret, whereargs
 end
 
 for calclogdet ∈ (true,false)
     dist = calclogdet ? :Normal : :Normal_kernel
     for sp ∈ (true,false)
         for trackval ∈ (true,false)
-            args = [:(Y::AbstractMutableFixedSizeMatrix{M,P,T,PY}), :(L::AbstractLowerTriangularMatrix{P,T})]
-            whereargs = [:M,:P,:T,:PY]
-            track = modify_args!(args, whereargs, (true,true), sp, trackval)
+            args = [:(Y::AbstractMutableFixedSizeMatrix{M,P,T,PY}), :(L::AbstractLowerTriangularMatrix{P,T,LL})]
+            track = modify_args!(args, sp, trackval)
             @eval @generated function $dist(
                 $(args...)
             ) where {$(whereargs...)}
                 track_Y, track_L = $track
                 config = NormalCholeskyConfiguration{T}()
                 config.M = M; config.P = P; config.track_Y = track_Y; config.track_L = track_L
-                config.Ystride = PY; config.sp = $sp; config.calclogdet = $calclogdet
+                config.Ystride = PY; config.sp = $sp; config.calclogdet = $calclogdet; config.LL = LL
                 multivariate_normal_SMLT_quote(config)
             end
 
-            args = [:(Y::AbstractMutableFixedSizeMatrix{M,P,T,PY}), :(μ::Tμ), :(L::AbstractLowerTriangularMatrix{P,T})]
-            whereargs = [:M,:P,:T,:PY,:Tμ]
-            track = modify_args!(args, whereargs, (true,true,true), sp, trackval)
+            args = [:(Y::AbstractMutableFixedSizeMatrix{M,P,T,PY}), :(μ::Tμ), :(L::AbstractLowerTriangularMatrix{P,T,LL})]
+            track, whereargs = modify_args!(args, sp, trackval)
             @eval @generated function $dist(
                 $(args...)
             ) where {$(whereargs...)}
                 track_Y, track_μ, track_L = $track
                 config = NormalCholeskyConfiguration{T}()
-                config.M = M; config.P = P; config.track_Y = track_Y; config.track_μ = track_μ; config.track_L = track_L; config.sp = $sp; config.Ystride = PY; config.calclogdet = $calclogdet
+                config.M = M; config.P = P; config.track_Y = track_Y; config.track_μ = track_μ; config.track_L = track_L; config.sp = $sp; config.Ystride = PY; config.calclogdet = $calclogdet; config.LL = LL
                 if Tμ === T
                     config.μstride = 0; config.μdim = 0
                 elseif Tμ <: LinearAlgebra.Adjoint
@@ -1191,9 +1204,8 @@ for calclogdet ∈ (true,false)
                 multivariate_normal_SMLT_quote(config)
             end
 
-            args = [:(Y::AbstractMutableFixedSizeMatrix{M,P,T,PY}), :(X::AbstractMutableFixedSizeMatrix{M,K_,T,PX}), :(β::AbstractMutableFixedSizeArray{Sβ,T,Nβ,Pβ}), :(L::AbstractLowerTriangularMatrix{P,T})]
-            whereargs = [:M,:P,:T,:PY,:PX,:PK,:K_,:Sβ,:Nβ,:Pβ]
-            track = modify_args!(args, whereargs, (true,true,true,true), sp, trackval)
+            args = [:(Y::AbstractMutableFixedSizeMatrix{M,P,T,PY}), :(X::AbstractMutableFixedSizeMatrix{M,K_,T,PX}), :(β::AbstractMutableFixedSizeArray{Sβ,T,Nβ,Pβ}), :(L::AbstractLowerTriangularMatrix{P,T,LL})]
+            track, whereargs = modify_args!(args, sp, trackval)
             @eval @generated function $dist(
                 $(args...)
             ) where {$(whereargs...)}
@@ -1201,15 +1213,14 @@ for calclogdet ∈ (true,false)
                 @assert Sβ.parameters[1] == K_
                 config = NormalCholeskyConfiguration{T}()
                 config.βstride = length(Pβ.parameters) == 1 ? K_ : (Pβ.parameters[2])::Int
-                @pack! config = M, P, track_Y, track_X, track_β, track_L; # pack! where names match
+                @pack! config = M, P, track_Y, track_X, track_β, track_L, LL # pack! where names match
                 config.sp = $sp; config.Ystride = PY; config.Xstride = PX; config.βdim = Nβ; config.XP = K_; config.calclogdet = $calclogdet
                 multivariate_normal_SMLT_quote(config)
             end
 
             args = [:(Y::AbstractMutableFixedSizeMatrix{M,P,T,PY}), :(X::AbstractMutableFixedSizeMatrix{M,K_,T,PX}),
-                    :(β::AbstractMutableFixedSizeArray{Sβ,T,Nβ,Pβ}), :(μ::Tμ), :(L::AbstractLowerTriangularMatrix{P,T})]
-            whereargs [:M,:P,:T,:PY,:PX,:Sβ,:Nβ,:Pβ,:Tμ,:K_]
-            track = modify_args!(args, whereargs, (true,true,true,true,true), sp, trackval)
+                    :(β::AbstractMutableFixedSizeArray{Sβ,T,Nβ,Pβ}), :(μ::Tμ), :(L::AbstractLowerTriangularMatrix{P,T,LL})]
+            track, whereargs = modify_args!(args, sp, trackval)
             @eval @generated @generated function $dist(
                 $(args...)
             ) where {$(whereargs...)}
@@ -1217,7 +1228,7 @@ for calclogdet ∈ (true,false)
                 config = NormalCholeskyConfiguration{T}()
                 config.βstride = length(Pβ.parameters) == 1 ? K_ : (Pβ.parameters[2])::Int
                 track_Y, track_X, track_β, track_μ, track_L = track
-                @pack! config = M, P, track_Y, track_X, track_β, track_μ, track_L, βstride
+                @pack! config = M, P, track_Y, track_X, track_β, track_μ, track_L, βstride, LL
                 config.sp = $sp; config.Ystride = PY; config.Xstride = PX; config.βdim = Nβ; config.XP = K_; config.calclogdet = $calclogdet
                 if Tμ === T
                     config.μdim = 0; config.μstride = 0
@@ -1241,16 +1252,15 @@ for calclogdet ∈ (true,false)
     dist = calclogdet ? :Normal : :Normal_kernel
     for sp ∈ (true,false)
         for trackval ∈ (true,false)        
-            args = [:(Y::AbstractMatrix{T}), :(L::AbstractLowerTriangularMatrix{P,T})]
-            whereargs = [:P,:T]
-            track = modify_args!(args, whereargs, (true,true), sp, trackval)
+            args = [:(Y::AbstractMatrix{T}), :(L::AbstractLowerTriangularMatrix{P,T,LL})]
+            track, whereargs = modify_args!(args, sp, trackval)
             @eval @generated function $dist(
                 $(args...)
             ) where {$(whereargs...)}
                 M, PY = gensym(:M), gensym(:PY)
                 track_Y, track_L = $track
                 config = NormalCholeskyConfiguration{T}()
-                @pack! config = M, P, track_Y, track_L
+                @pack! config = M, P, track_Y, track_L, LL
                 config.Ystride = PY; track.sp = $sp; track.calclogdet = $calclogdet
                 quote
                     $M = size(Y,1)
@@ -1259,9 +1269,8 @@ for calclogdet ∈ (true,false)
                 end
             end
 
-            args = [:(Y::AbstractMatrix{T}), :(μ::Tμ), :(L::AbstractLowerTriangularMatrix{P,T})]
-            whereargs = [:P,:T,:Tμ]
-            track = modify_args!(args, whereargs, (true,true,true), sp, trackval)
+            args = [:(Y::AbstractMatrix{T}), :(μ::Tμ), :(L::AbstractLowerTriangularMatrix{P,T,LL})]
+            track, whereargs = modify_args!(args, sp, trackval)
             @eval @generated function $dist(
                 $(args...)
             ) where {$(whereargs...)}
@@ -1272,7 +1281,7 @@ for calclogdet ∈ (true,false)
                     $M = size(Y,1)
                     $PY = $(Y <: Array ? M : :(stride(Y,2)))
                 end
-                @pack! config = M, P, track_Y, track_μ, track_L
+                @pack! config = M, P, track_Y, track_μ, track_L, LL
                 config.sp = $sp; config.Ystride = PY; config.calclogdet = $calclogdet
                 q = if Tμ === T
                     config.μdim = 0; config.μstride = 0
@@ -1296,9 +1305,8 @@ for calclogdet ∈ (true,false)
                 end
             end
 
-            args = [:(Y::AbstractMatrix{T}), :(X::AbstractMatrix{T}), :(β::AbstractMutableFixedSizeArray{Sβ,T,Nβ,Pβ}), :(L::AbstractLowerTriangularMatrix{P,T})]
-            whereargs = [:P,:T,:PK,:Sβ,:Nβ,:Pβ]
-            track = modify_args!(args, whereargs, (true,true,true,true), sp, trackval)
+            args = [:(Y::AbstractMatrix{T}), :(X::AbstractMatrix{T}), :(β::AbstractMutableFixedSizeArray{Sβ,T,Nβ,Pβ}), :(L::AbstractLowerTriangularMatrix{P,T,LL})]
+            track, whereargs = modify_args!(args, sp, trackval)
             @eval @generated function $dist(
                 $(args...)
             ) where {$(whereargs...)}
@@ -1307,7 +1315,7 @@ for calclogdet ∈ (true,false)
                 M, PY, PX = gensym(:M), gensym(:PY), gensym(:PX)
                 track_Y, track_X, track_β, track_L = $track
                 config = NormalCholeskyConfiguration{T}()
-                @pack! config = track_Y, track_X, track_β, track_L, M, P, βstride
+                @pack! config = track_Y, track_X, track_β, track_L, M, P, βstride, LL
                 config.calclogdet = $calclogdet; config.sp = $sp; config.Ystride = PY; config.Xstride = PX; config.βdim = Nβ; config.XP = K_
                 q = multivariate_normal_SMLT_quote(config)
                 quote
@@ -1318,9 +1326,8 @@ for calclogdet ∈ (true,false)
                 end
             end
             
-            args = [:(Y::AbstractMatrix{T}), :(X::AbstractMatrix{T}), :(β::AbstractMutableFixedSizeArray{Sβ,T,Nβ,Pβ}), :(μ::Tμ), :(L::AbstractLowerTriangularMatrix{P,T})]
-            whereargs = [:P,:T,:Sβ,:Nβ,:Pβ,:Tμ]
-            track = modify_args!(args, whereargs, (true,true,true,true,true), sp, trackval)
+            args = [:(Y::AbstractMatrix{T}), :(X::AbstractMatrix{T}), :(β::AbstractMutableFixedSizeArray{Sβ,T,Nβ,Pβ}), :(μ::Tμ), :(L::AbstractLowerTriangularMatrix{P,T,LL})]
+            track, whereargs = modify_args!(args, sp, trackval)
             @eval @generated function $dist(
                 $(args...)
             ) where {$(whereargs...)}
@@ -1334,7 +1341,7 @@ for calclogdet ∈ (true,false)
                     $PX = $(X <: Array ? M : :(stride(X,2)))
                 end
                 config = NormalCholeskyConfiguration{T}()
-                @pack! config = track_Y, track_X, track_β, track_μ, track_L, M, P, βstride
+                @pack! config = track_Y, track_X, track_β, track_μ, track_L, M, P, βstride, LL
                 config.Ystride = PY; config.Xstride = PX; config.βdim = Nβ; config.XP = K_; config.sp = $sp; config.calclogdet = $calclogdet
                 q = if Tμ === T
                     config.μdim = 0; config.μstride = 0
@@ -2468,375 +2475,230 @@ end
     simplify_expr(q)
 end
 
-
-
-@generated function ∂Normal(
-    Y::AbstractMutableFixedSizeMatrix{M,P,T,PY},
-    L::AbstractLowerTriangularMatrix{P,T},
-    ::Val{track} = Val{(true,true)}()
-) where {M,P,T,track,PY}
-    ∂multivariate_normal_SMLT_quote(
-        NormalCholeskyConfiguration{T}(
-            M = M, P = P, track_Y = track[1], track_L = track[2], arity = 2, sp = false, Ystride = PY
-        )
-    )
-end
-@generated function ∂Normal(
-    sptr::StackPointer,
-    Y::AbstractMutableFixedSizeMatrix{M,P,T,PY},
-    L::AbstractLowerTriangularMatrix{P,T},
-    ::Val{track} = Val{(true,true)}()
-) where {M,P,T,track,PY}
-    ∂multivariate_normal_SMLT_quote(
-        NormalCholeskyConfiguration{T}(
-            M = M, P = P, track_Y = track[1], track_L = track[2], arity = 2, sp = true, Ystride = PY
-        )
-    )
-end
-
-function ∂Normal_static3_quote(M,P,T,PY,Tμ,track, sptr::Bool)
-    config = if Tμ === T
-        NormalCholeskyConfiguration{T}(M = M, P = P, track_Y = track[1], track_μ = track[2], track_L = track[3], arity = 3, sp = sptr, Ystride = PY, μdim = 0, μstride = 0)
-    elseif Tμ <: LinearAlgebra.Adjoint{T,<:AbstractMutableFixedSizeVector}
-        NormalCholeskyConfiguration{T}(M = M, P = P, track_Y = track[1], track_μ = track[2], track_L = track[3], arity = 3, sp = sptr, Ystride = PY, μdim = 1, μstride = 1, μtransposed = true)
-    elseif Tμ <: AbstractMutableFixedSizeVector
-        NormalCholeskyConfiguration{T}(M = M, P = P, track_Y = track[1], track_μ = track[2], track_L = track[3], arity = 3, sp = sptr, Ystride = PY, μdim = 1, μstride = 1)
-    elseif Tμ <: AbstractMutableFixedSizeMatrix
-        NormalCholeskyConfiguration{T}(M = M, P = P, track_Y = track[1], track_μ = track[2], track_L = track[3], arity = 3, sp = sptr, Ystride = PY, μdim = 2, μstride = (Tμ.parameters[4].parameters[2])::Int)
+function modify_args_∂!(args, allocate_partials, calclogdet)
+    syms = [first(arg.args) for arg ∈ args]
+    tracksyms = [Symbol(:track_,sym) for sym ∈ syms]
+    whereargs = calc_whereset(args)
+    if allocate_partials
+        pushfirst!(args, :(::Val{track}))
+        ret = quote
+            $(Expr(:tuple, tracksyms...)) = track
+        end
+        push!(whereargs, :track)
     else
-        throw("Type of μ = $(Tμ) was not recognized.")
+        ∂arg_types = [Symbol(:∂, s, :T) for s ∈ syms]
+        foreach(pa -> push!(whereargs, pa), ∂arg_types)
+        prepend!(args, [Expr(:(::), s, ∂s) for (s,∂s) ∈ zip(syms, ∂arg_types)])
+        ret = quote
+            $([:($ts = $s ==! nothing) for (s,ts) ∈ zip(syms, track_syms)]...)
+        end
     end
-    ∂multivariate_normal_SMLT_quote(config)
-end
-
-   
-
-@generated function ∂Normal(
-    Y::AbstractMutableFixedSizeMatrix{M,P,T,PY},
-    μ::Tμ,
-    L::AbstractLowerTriangularMatrix{P,T},
-    ::Val{track} = Val{(true,true,true)}()
-) where {M,P,T,PY,Tμ,track}
-    # ) where {M,P,T,track,PY,Tμ}
-    ∂Normal_static3_quote(M,P,T,PY,Tμ, track, false)
-end
-@generated function ∂Normal(
-    sptr::StackPointer,
-    Y::AbstractMutableFixedSizeMatrix{M,P,T,PY},
-    μ::Tμ,
-    L::AbstractLowerTriangularMatrix{P,T},
-    ::Val{track} = Val{(true,true,true)}()
-) where {M,P,T,PY,Tμ,track}
-    # ) where {M,P,T,track,PY,Tμ}
-    ∂Normal_static3_quote(M,P,T,PY,Tμ, track, true)
-end
-
-
-@generated function ∂Normal(
-    Y::AbstractMutableFixedSizeMatrix{M,P,T,PY},
-    X::AbstractMutableFixedSizeMatrix{M,K_,T,PX},
-    β::AbstractMutableFixedSizeArray{Sβ,T,Nβ,Pβ},
-    L::AbstractLowerTriangularMatrix{P,T},
-    ::Val{track} = Val{(true,true,true,true)}()
-# ) where {M,P,T,track,PY,PX,Sβ,Nβ,Pβ,K_}
-) where {M,P,T,track,K_,PY,PX,Sβ,Nβ,Pβ}
-    @assert Sβ.parameters[1] == K_
-    βstride = length(Pβ.parameters) == 1 ? K_ : (Pβ.parameters[2])::Int
-    ∂multivariate_normal_SMLT_quote(
-        NormalCholeskyConfiguration{T}(
-            M = M, P = P, track_Y = track[1], track_X = track[2], track_β = track[3], track_L = track[4], sp = false, Ystride = PY, Xstride = PX, βstride = βstride, βdim = Nβ, XP = K_, arity = 4
-        )
-    )
-end
-@generated function ∂Normal(
-    sptr::StackPointer,
-    Y::AbstractMutableFixedSizeMatrix{M,P,T,PY},
-    X::AbstractMutableFixedSizeMatrix{M,K_,T,PX},
-    β::AbstractMutableFixedSizeArray{Sβ,T,Nβ,Pβ},
-    L::AbstractLowerTriangularMatrix{P,T},
-    ::Val{track} = Val{(true,true,true,true)}()
-# ) where {M,P,T,track,PY,PX,Sβ,Nβ,Pβ,K_}
-) where {M,P,T,track,K_,PY,PX,Sβ,Nβ,Pβ}
-    @assert Sβ.parameters[1] == K_
-    βstride = length(Pβ.parameters) == 1 ? K_ : (Pβ.parameters[2])::Int
-    ∂multivariate_normal_SMLT_quote(
-        NormalCholeskyConfiguration{T}(
-            M = M, P = P, track_Y = track[1], track_X = track[2], track_β = track[3], track_L = track[4], sp = true, Ystride = PY, Xstride = PX, βstride = βstride, βdim = Nβ, XP = K_, arity = 4
-        )
-    )
-end
-
-function normal_fmadd_static_quote(M,P,T,track,K_,PY,PX,Tμ,Sβ,Nβ,Pβ,sptr::Bool)
-    @assert Sβ.parameters[1] == K_
-    βstride = length(Pβ.parameters) == 1 ? K_ : (Pβ.parameters[2])::Int
-    config = if Tμ === T
-        NormalCholeskyConfiguration{T}(
-            M = M, P = P, track_Y = track[1], track_X = track[2], track_β = track[3], track_μ = track[4], track_L = track[5], sp = sptr,
-            Ystride = PY, Xstride = PX, βstride = βstride, βdim = Nβ, XP = K_, μdim = 0, μstride = 0, arity = 5
-        )
-    elseif Tμ <: LinearAlgebra.Adjoint{T,<:AbstractMutableFixedSizeVector}
-        NormalCholeskyConfiguration{T}(
-            M = M, P = P, track_Y = track[1], track_X = track[2], track_β = track[3], track_μ = track[4], track_L = track[5], sp = sptr,
-            Ystride = PY, Xstride = PX, βstride = βstride, βdim = Nβ, XP = K_, μdim = 1, μstride = 1, μtransposed = true, arity = 5
-        )
-    elseif Tμ <: AbstractMutableFixedSizeVector
-        NormalCholeskyConfiguration{T}(
-            M = M, P = P, track_Y = track[1], track_X = track[2], track_β = track[3], track_μ = track[4], track_L = track[5], sp = sptr,
-            Ystride = PY, Xstride = PX, βstride = βstride, βdim = Nβ, XP = K_, μdim = 1, μstride = 1, arity = 5
-        )
-    elseif Tμ <: AbstractMutableFixedSizeMatrix
-        NormalCholeskyConfiguration{T}(
-            M = M, P = P, track_Y = track[1], track_X = track[2], track_β = track[3], track_μ = track[4], track_L = track[5], sp = sptr,
-            Ystride = PY, Xstride = PX, βstride = βstride, βdim = Nβ, XP = K_, μdim = 2, μstride = (Tμ.parameters[4].parameters[2])::Int, arity = 5
-        )
-    else
-        throw("Type of μ = $(Tμ) was not recognized.")
+    push!(ret.args, :(config = NormalCholeskyConfiguration{T}()))
+    push!(ret.args, :(config.arity = $(length(syms))))
+    push!(ret.args, :(config.M = M; config.P = P; config.LL = LL))
+    push!(ret.args, :(config.calclogdet = $calclogdet))
+    for (s,ts) ∈ zip(syms, track_syms)
+        push!(ret.args, :(config.$ts = $ts))
+        is = Symbol(:init, s)
+        push!(ret.args, :(config.$is = !isinitialized($s)))
     end
-    ∂multivariate_normal_SMLT_quote(config)
+    ret, whereargs
 end
 
-    # M::Union{Symbol,Integer}, P::Int, track::NTuple{D,Bool}, T::DataType = Float64;
-    # βstride::Int = -1, Xstride::Int = -1, Ystride::Int = M, μstride::Int = -1,
-    # μdim::Int = -1, sp::Bool = false, βdim::Int = -1,  XP::Int = -1, μtransposed::Bool = false
-@generated function ∂Normal_fmadd(
-    Y::AbstractMutableFixedSizeMatrix{M,P,T,PY},
-    X::AbstractMutableFixedSizeMatrix{M,K_,T,PX},
-    β::AbstractMutableFixedSizeArray{Sβ,T,Nβ,Pβ},
-    μ::Tμ,
-    L::AbstractLowerTriangularMatrix{P,T},
-    ::Val{track} = Val{(true,true,true,true,true)}()
-# ) where {M,P,T,track,K_,PY,PX,Sβ,Nβ,Pβ,Tμ}
-) where {M,P,T,track,K_,PY,PX,Tμ,Sβ,Nβ,Pβ}
-    normal_fmadd_static_quote(M,P,T,track,K_,PY,PX,Tμ,Sβ,Nβ,Pβ,false)
-end
-@generated function ∂Normal_fmadd(
-    sptr::StackPointer,
-    Y::AbstractMutableFixedSizeMatrix{M,P,T,PY},
-    X::AbstractMutableFixedSizeMatrix{M,K_,T,PX},
-    β::AbstractMutableFixedSizeArray{Sβ,T,Nβ,Pβ},
-    μ::Tμ,
-    L::AbstractLowerTriangularMatrix{P,T},
-    ::Val{track} = Val{(true,true,true,true,true)}()
-) where {M,P,T,track,K_,PY,PX,Sβ,Nβ,Pβ,Tμ}
-    # ) where {M,P,T,track,K_,PY,PX,Tμ,Sβ,Nβ,Pβ}
-    normal_fmadd_static_quote(M,P,T,track,K_,PY,PX,Tμ,Sβ,Nβ,Pβ,true)
-end
+for calclogdet ∈ (true, false)
+    distbase = calclogdet ? :∂Normal : :∂Normal_kernel
+    for allocate_partials ∈ (true, false)
+        dist = allocate_partials ? distbase : Symbol(distbase, :!)
+        args = [:(Y::AbstractMutableFixedSizeMatrix{M,P,T,PY}), :(L::AbstractLowerTriangularMatrix{P,T,LL})]
+        setup, whereargs = modify_args_∂!(args, allocate_partials, calclogdet)
+        for sp ∈ (false, true)
+            sp && pushfirst!(args, :(sptr::StackPointer))
+            @eval @generated function $dist( $(args...) ) where {$(whereargs...)}
+                $setup
+                config.sp = $sp
+                config.Ystride = PY
+                ∂multivariate_normal_SMLT_quote(config)
+            end
+        end
 
-@generated function ∂Normal(
-    Y::AbstractMatrix{T},
-    L::AbstractLowerTriangularMatrix{P,T},
-    ::Val{track} = Val{(true,true)}()
-) where {P,T,track}
-    M, PY = gensym(:M), gensym(:PY)
-    quote
-        $(Expr(:meta,:inline))
-        $M = size(Y,1)
-        $PY = $(Y <: Array ? M : :(stride(Y,2)))
-        $(∂multivariate_normal_SMLT_quote(
-            NormalCholeskyConfiguration{T}(
-                M = M, P = P, track_Y = track[1], track_L = track[2], arity = 2, sp = false, Ystride = PY
-            )
-        ))
-    end
-end
-@generated function ∂Normal(
-    sptr::StackPointer,
-    Y::AbstractMatrix{T},
-    L::AbstractLowerTriangularMatrix{P,T},
-    ::Val{track} = Val{(true,true)}()
-) where {P,T,track}
-    M, PY = gensym(:M), gensym(:PY)
-    quote
-        $(Expr(:meta,:inline))
-        $M = size(Y,1)
-        $PY = $(Y <: Array ? M : :(stride(Y,2)))
-        $(∂multivariate_normal_SMLT_quote(
-            NormalCholeskyConfiguration{T}(
-                M = M, P = P, track_Y = track[1], track_L = track[2], arity = 2, sp = true, Ystride = PY
-            )
-        ))
+        args = [:(Y::AbstractMutableFixedSizeMatrix{M,P,T,PY}), :(μ::Tμ), :(L::AbstractLowerTriangularMatrix{P,T,LL})]
+        setup, whereargs = modify_args_∂!(args, allocate_partials, calclogdet)
+        for sp ∈ (false,true)
+            sp && pushfirst!(args, :(sptr::StackPointer))
+            @eval @generated function $dist( $(args...) ) where {$(whereargs...)}
+                $setup
+                config.sp = $sp
+                config.Ystride = PY
+                if Tμ === T
+                    config.μdim = 0; config.μstride = 0
+                elseif Tμ <: LinearAlgebra.Adjoint{T,<:AbstractMutableFixedSizeVector}
+                    config.μdim = 1; config.μstride = 1; config.μtransposed = true
+                elseif Tμ <: AbstractMutableFixedSizeVector
+                    config.μdim = 1; config.μstride = 1
+                elseif Tμ <: AbstractMutableFixedSizeMatrix
+                    config.μdim = 2; config.μstride = (Tμ.parameters[4].parameters[2])::Int
+                else
+                    throw("Type of μ = $(Tμ) was not recognized.")
+                end
+                ∂multivariate_normal_SMLT_quote(config)
+            end
+        end
+
+        args = [:(Y::AbstractMutableFixedSizeMatrix{M,P,T,PY}), :(X::AbstractMutableFixedSizeMatrix{M,K_,T,PX}), :(β::AbstractMutableFixedSizeArray{Sβ,T,Nβ,Pβ}), :(L::AbstractLowerTriangularMatrix{P,T,LL})]
+        setup, whereargs = modify_args_∂!(args, allocate_partials, calclogdet)
+        for sp ∈ (false, true)
+            sp && pushfirst!(args, :(sptr::StackPointer))
+            @eval @generated function $dist( $(args...) ) where {$(whereargs...)}
+                @assert Sβ.parameters[1] == K_
+                βstride = length(Pβ.parameters) == 1 ? K_ : (Pβ.parameters[2])::Int
+                $setup
+                config.Ystride = PY; config.Xstride = PX; config.βstride = βstride; config.βdim = Nβ; config.XP = K_; config.sp = $sp
+                ∂multivariate_normal_SMLT_quote(config)
+            end
+        end
+
+        args = [:(Y::AbstractMutableFixedSizeMatrix{M,P,T,PY}), :(X::AbstractMutableFixedSizeMatrix{M,K_,T,PX}), :(β::AbstractMutableFixedSizeArray{Sβ,T,Nβ,Pβ}), :(μ::Tμ), :(L::AbstractLowerTriangularMatrix{P,T,LL})]
+        setup, whereargs = modify_args_∂!(args, allocate_partials, calclogdet)
+        for sp ∈ (false, true)
+            sp && pushfirst!(args, :(sptr::StackPointer))
+            @eval @generated function $dist( $(args...) ) where {$(whereargs...)}
+                @assert Sβ.parameters[1] == K_
+                βstride = length(Pβ.parameters) == 1 ? K_ : (Pβ.parameters[2])::Int
+                $setup
+                config.sp = $sp; config.Ystride = PY; config.Xstride = PX; config.βstride = βstride; config.βdim = Nβ; config.XP = K_
+                config = if Tμ === T
+                    config.μdim = 0; config.μstride = 0
+                elseif Tμ <: LinearAlgebra.Adjoint{T,<:AbstractMutableFixedSizeVector}
+                    config.μdim = 1; config.μstride = 1; config.μtransposed
+                elseif Tμ <: AbstractMutableFixedSizeVector
+                    config.μdim = 1; config.μstride = 1
+                elseif Tμ <: AbstractMutableFixedSizeMatrix
+                    config.μdim = 2; config.μstride = (Tμ.parameters[4].parameters[2])::Int
+                else
+                    throw("Type of μ = $(Tμ) was not recognized.")
+                end
+                ∂multivariate_normal_SMLT_quote(config)
+            end
+        end
     end
 end
 
+for calclogdet ∈ (true, false)
+    distbase = calclogdet ? :∂Normal : :∂Normal_kernel
+    for allocate_partials ∈ (true, false)
+        dist = allocate_partials ? distbase : Symbol(distbase, :!)
+        args = [:(Y::AbstractMatrix{T}), :(L::AbstractLowerTriangularMatrix{P,T,LL})]
+        setup, whereargs = modify_args_∂!(args, allocate_partials, calclogdet)
+        for sp ∈ (false, true)
+            sp && pushfirst!(args, :(sptr::StackPointer))
+            @eval @generated function $dist( $(args...) ) where {$(whereargs...)}
+                $setup
+                config.sp = $sp
+                M, PY = gensym(:M), gensym(:PY)
+                config.Ystride = PY
+                quote
+                    $(Expr(:meta,:inline))
+                    $M = size(Y,1)
+                    $PY = $(Y <: Array ? M : :(stride(Y,2)))
+                    $(∂multivariate_normal_SMLT_quote(config))
+                end
+            end
+        end
+        
+        args = [:(Y::AbstractMatrix{T}), :(μ::Tμ), :(L::AbstractLowerTriangularMatrix{P,T,LL})]
+        setup, whereargs = modify_args_∂!(args, allocate_partials, calclogdet)
+        for sp ∈ (false,true)
+            sp && pushfirst!(args, :(sptr::StackPointer))
+            @eval @generated function $dist( $(args...) ) where {$(whereargs...)}
+                M, PY = gensym(:M), gensym(:PY)
+                defs_quote = quote
+                    $M = size(Y,1)
+                    $PY = $(Y <: Array ? M : :(stride(Y,2)))
+                end
+                $setup
+                config.sp = $sp
+                config.Ystride = PY
+                if Tμ === T
+                    config.μdim = 0; config.μstride = 0
+                elseif Tμ <: LinearAlgebra.Adjoint{T,<:AbstractMutableFixedSizeVector}
+                    config.μdim = 1; config.μstride = 1; config.μtransposed = true
+                elseif Tμ <: AbstractVector
+                    config.μdim = 1; config.μstride = 1
+                elseif Tμ <: AbstractMutableFixedSizeMatrix
+                    config.μdim = 2; config.μstride =  = (Tμ.parameters[4].parameters[2])::Int
+                elseif Tμ <: AbstractMatrix
+                    μstride = gensym(:μstride)
+                    push!(defs_quote.args, :($μstride = stride(μ,2)))
+                    config.μdim = 2; config.μstride = μstride
+                else
+                    throw("Type of μ = $(Tμ) was not recognized.")
+                end
+                quote
+                    $(Expr(:meta,:inline))
+                    $defs_quote
+                    $(∂multivariate_normal_SMLT_quote(config))
+                end
+            end
+        end
 
-function normal_μ_dynamic_quote(Y, T,P,Tμ,track, sptr)
-    M, PY = gensym(:M), gensym(:PY)
-    defs_quote = quote
-        $M = size(Y,1)
-        $PY = $(Y <: Array ? M : :(stride(Y,2)))
+        args = [:(Y::AbstractMatrix{T}), :(X::AbstractMatrix{T}), :(β::AbstractMutableFixedSizeArray{Sβ,T,Nβ,Pβ}), :(L::AbstractLowerTriangularMatrix{P,T,LL})]
+        setup, whereargs = modify_args_∂!(args, allocate_partials, calclogdet)
+        for sp ∈ (false, true)
+            sp && pushfirst!(args, :(sptr::StackPointer))
+            @eval @generated function $dist( $(args...) ) where {$(whereargs...)}
+                M, PY, PX = gensym(:M), gensym(:PY), gensym(:PX)
+                K_ = Sβ.parameters[1]
+                $setup
+                config.βstride = length(Pβ.parameters) == 1 ? K_ : (Pβ.parameters[2])::Int
+                config.Ystride = PY; config.Xstride = PX; config.βdim = Nβ; config.XP = K_; config.sp = $sp
+                quote
+                    $(Expr(:meta,:inline))
+                    $M = size(Y,1)
+                    $PY = $(Y <: Array ? M : :(stride(Y,2)))
+                    $PX = $(X <: Array ? M : :(stride(X,2)))
+                    $(∂multivariate_normal_SMLT_quote(config))
+                end
+            end
+        end
+
+        args = [:(Y::AbstractMatrix{T}), :(X::AbstractMatrix{T}), :(β::AbstractMutableFixedSizeArray{Sβ,T,Nβ,Pβ}), :(μ::Tμ), :(L::AbstractLowerTriangularMatrix{P,T,LL})]
+        setup, whereargs = modify_args_∂!(args, allocate_partials, calclogdet)
+        for sp ∈ (false, true)
+            sp && pushfirst!(args, :(sptr::StackPointer))
+            @eval @generated function $dist( $(args...) ) where {$(whereargs...)}
+                M, PY, PX = gensym(:M), gensym(:PY), gensym(:PX)
+                K_ = (Sβv[1])::Int
+                defs_quote = quote
+                    $M = size(Y,1)
+                    $PY = $(Y <: Array ? M : :(stride(Y,2)))
+                    $PX = $(X <: Array ? M : :(stride(X,2)))
+                end
+                $setup
+                config.sp = $sp; config.Ystride = PY; config.Xstride = PX; config.βstride = βstride; config.βdim = Nβ; config.XP = K_
+                config.βstride = length(Pβv) == 1 ? K_ : (Pβv[2])::Int
+                if Tμ === T
+                    config.μdim = 0; config.μstride = 0
+                elseif Tμ <: LinearAlgebra.Adjoint{T,<:AbstractMutableFixedSizeVector}
+                    config.μdim = 1; config.μstride = 1; config.μtransposed = true
+                elseif Tμ <: AbstractVector
+                    config.μdim = 1; config.μstride = 1
+                elseif Tμ <: AbstractMutableFixedSizeMatrix
+                    config.μdim = 2; config.μstride =  = (Tμ.parameters[4].parameters[2])::Int
+                elseif Tμ <: AbstractMatrix
+                    μstride = gensym(:μstride)
+                    push!(defs_quote.args, :($μstride = stride(μ,2)))
+                    config.μdim = 2; config.μstride = μstride
+                else
+                    throw("Type of μ = $(Tμ) was not recognized.")
+                end
+                quote
+                    $(Expr(:meta,:inline))
+                    $defs_quote
+                    $(∂multivariate_normal_SMLT_quote(config))
+                end
+            end
+        end
     end
-    config = if Tμ === T
-        NormalCholeskyConfiguration{T}(M = M, P = P, track_Y = track[1], track_μ = track[2], track_L = track[3], arity = 3, sp = sptr, Ystride = PY, μdim = 0, μstride = 0)
-    elseif Tμ <: LinearAlgebra.Adjoint{T,<:AbstractMutableFixedSizeVector}
-        NormalCholeskyConfiguration{T}(M = M, P = P, track_Y = track[1], track_μ = track[2], track_L = track[3], arity = 3, sp = sptr, Ystride = PY, μdim = 1, μstride = 1, μtransposed = true)
-    elseif Tμ <: AbstractMutableFixedSizeVector
-        NormalCholeskyConfiguration{T}(M = M, P = P, track_Y = track[1], track_μ = track[2], track_L = track[3], arity = 3, sp = sptr, Ystride = PY, μdim = 1, μstride = 1)
-    elseif Tμ <: AbstractMutableFixedSizeMatrix
-        NormalCholeskyConfiguration{T}(M = M, P = P, track_Y = track[1], track_μ = track[2], track_L = track[3], arity = 3, sp = sptr, Ystride = PY, μdim = 2, μstride = (Tμ.parameters[4].parameters[2])::Int)
-    elseif Tμ <: AbstractMatrix
-        μstride = gensym(:μstride)
-        push!(defs_quote.args, :($μstride = stride(μ,2)))
-        NormalCholeskyConfiguration{T}(M = M, P = P, track_Y = track[1], track_μ = track[2], track_L = track[3], arity = 3, sp = sptr, Ystride = PY, μdim = 2, μstride = μstride)
-    else
-        throw("Type of μ = $(Tμ) was not recognized.")
-    end
-    quote
-        $(Expr(:meta,:inline))
-        $defs_quote
-        $(∂multivariate_normal_SMLT_quote(config))
-    end
-end
-
-
-@generated function ∂Normal(
-    Y::AbstractMatrix{T},
-    μ::Tμ,
-    L::AbstractLowerTriangularMatrix{P,T},
-    ::Val{track} = Val{(true,true,true)}()
-) where {P,T,Tμ,track}
-# ) where {T,P,Tμ,track}
-    normal_μ_dynamic_quote(Y, T,P,Tμ,track, false)
-end
-@generated function ∂Normal(
-    sptr::StackPointer,
-    Y::AbstractMatrix{T},
-    μ::Tμ,
-    L::AbstractLowerTriangularMatrix{P,T},
-    ::Val{track} = Val{(true,true,true)}()
-) where {P,T,Tμ,track}
-# ) where {T,P,Tμ,track}
-    normal_μ_dynamic_quote(Y, T,P,Tμ,track, true)
-end
-
-# @generated function Normal(
-    # Y::AbstractMatrix{T},
-    # X::AbstractMatrix{T},
-    # β::AbstractMutableFixedSizeArray{Sβ,T,Nβ,Pβ},
-    # L::AbstractLowerTriangularMatrix{P,T},
-    # ::Val{track} = Val{(true,true,true,true)}()
-# ) where {P,T,track,PK,Sβ,Nβ,Pβ}
-    # K_ = Sβ.parameters[1]
-    # M, PY, PX = gensym(:M), gensym(:PY), gensym(:PX)
-    # q = multivariate_normal_SMLT_quote(M, P, track, T, sp = false, Ystride = PY, βstride = Pβ, Xstride = PX, βdim = Nβ, XP = K_)
-    # quote
-        # $M = size(Y,1)
-        # $PY = $(Y <: Array ? M : :(stride(Y,2)))
-        # $PX = $(X <: Array ? M : :(stride(X,R)))
-        # $q
-    # end
-# end
-
-function ∂Normal_Xβ_dynamic_quote(Y, X, T, P, track, Sβ, Nβ, Pβ, sptr::Bool)
-    M, PY, PX = gensym(:M), gensym(:PY), gensym(:PX)
-    K_ = Sβ.parameters[1]
-    βstride = length(Pβ.parameters) == 1 ? K_ : (Pβ.parameters[2])::Int
-    config = NormalCholeskyConfiguration{T}(
-        M = M, P = P, track_Y = track[1], track_X = track[2], track_β = track[3], track_L = track[4], sp = sptr, Ystride = PY, Xstride = PX, βstride = βstride, βdim = Nβ, XP = K_, arity = 4
-    )
-    quote
-        $(Expr(:meta,:inline))
-        $M = size(Y,1)
-        $PY = $(Y <: Array ? M : :(stride(Y,2)))
-        $PX = $(X <: Array ? M : :(stride(X,2)))
-        $(∂multivariate_normal_SMLT_quote(config))
-    end
-end
-
-@generated function ∂Normal(
-    Y::AbstractMatrix{T},
-    X::AbstractMatrix{T},
-    β::AbstractMutableFixedSizeArray{Sβ,T,Nβ,Pβ},
-    L::AbstractLowerTriangularMatrix{P,T},
-    ::Val{track} = Val{(true,true,true,true)}()
-) where {P,T,track,Sβ,Nβ,Pβ}
-# ) where {T,P,track,Sβ,Nβ,Pβ}
-    ∂Normal_Xβ_dynamic_quote(Y, X, T, P, track, Sβ, Nβ, Pβ, false)
-end
-@generated function ∂Normal(
-    sptr::StackPointer,
-    Y::AbstractMatrix{T},
-    X::AbstractMatrix{T},
-    β::AbstractMutableFixedSizeArray{Sβ,T,Nβ,Pβ},
-    L::AbstractLowerTriangularMatrix{P,T},
-    ::Val{track} = Val{(true,true,true,true)}()
-) where {P,T,track,Sβ,Nβ,Pβ}
-# ) where {T,P,track,Sβ,Nβ,Pβ}
-    ∂Normal_Xβ_dynamic_quote(Y, X, T, P, track, Sβ, Nβ, Pβ, true)
-end
-
-
-    # M::Union{Symbol,Integer}, P::Int, track::NTuple{D,Bool}, T::DataType = Float64;
-    # βstride::Int = -1, Xstride::Int = -1, Ystride::Int = M, μstride::Int = -1,
-    # μdim::Int = -1, sp::Bool = false, βdim::Int = -1,  XP::Int = -1, μtransposed::Bool = false
-
-@noinline function ∂Normal_fmadd_dynamic_quote(Y, X, P, T, track, Sβv, Nβ, Pβv, Tμ, sptr::Bool)
-    M, PY, PX = gensym(:M), gensym(:PY), gensym(:PX)
-    K_ = (Sβv[1])::Int
-    βstride = length(Pβv) == 1 ? K_ : (Pβv[2])::Int
-    defs_quote = quote
-        $M = size(Y,1)
-        $PY = $(Y <: Array ? M : :(stride(Y,2)))
-        $PX = $(X <: Array ? M : :(stride(X,2)))
-    end
-    config = if Tμ === T
-        NormalCholeskyConfiguration{T}(
-            M = M, P = P, track_Y = track[1], track_X = track[2], track_β = track[3], track_μ = track[4], track_L = track[5],
-            sp = sptr, Ystride = PY, Xstride = PX, βstride = βstride, βdim = Nβ, XP = K_, μdim = 0, μstride = 0, arity = 5
-        )
-    elseif Tμ <: LinearAlgebra.Adjoint{T,<:AbstractVector{T}}
-        NormalCholeskyConfiguration{T}(
-            M = M, P = P, track_Y = track[1], track_X = track[2], track_β = track[3], track_μ = track[4], track_L = track[5],
-            sp = sptr, Ystride = PY, Xstride = PX, βstride = βstride, βdim = Nβ, XP = K_, μdim = 1, μstride = 1, μtransposed = true, arity = 5
-        )
-    elseif Tμ <: AbstractMutableFixedSizeVector
-        NormalCholeskyConfiguration{T}(
-            M = M, P = P, track_Y = track[1], track_X = track[2], track_β = track[3], track_μ = track[4], track_L = track[5],
-            sp = sptr, Ystride = PY, Xstride = PX, βstride = βstride, βdim = Nβ, XP = K_, μdim = 1, μstride = 1, arity = 5
-        )
-    elseif Tμ <: AbstractMutableFixedSizeMatrix
-        NormalCholeskyConfiguration{T}(
-            M = M, P = P, track_Y = track[1], track_X = track[2], track_β = track[3], track_μ = track[4], track_L = track[5],
-            sp = sptr, Ystride = PY, Xstride = PX, βstride = βstride, βdim = Nβ, XP = K_, μdim = 2, μstride = (Tμ.parameters[4].parameters[2])::Int, arity = 5
-        )
-    elseif Tμ <: AbstractMatrix
-        μstride = gensym(:μstride)
-        push!(defs_quote.args, :($μstride = stride(μ,2)))
-        NormalCholeskyConfiguration{T}(
-            M = M, P = P, track_Y = track[1], track_X = track[2], track_β = track[3], track_μ = track[4], track_L = track[5],
-            sp = sptr, Ystride = PY, Xstride = PX, βstride = βstride, βdim = Nβ, XP = K_, μdim = 2, μstride = μstride, arity = 5
-        )
-    else
-        throw("Type of μ = $(Tμ) was not recognized.")
-    end
-    quote
-        $(Expr(:meta,:inline))
-        $defs_quote
-        $(∂multivariate_normal_SMLT_quote(config))
-    end
-end
-
-@generated function ∂Normal_fmadd(
-    Y::AbstractMatrix{T},
-    X::AbstractMatrix{T},
-    β::AbstractMutableFixedSizeArray{Sβ,T,Nβ,Pβ},
-    μ::Tμ,
-    L::AbstractLowerTriangularMatrix{P,T},
-    ::Val{track} = Val{(true,true,true,true,true)}()
-) where {P,T,track,Sβ,Nβ,Pβ,Tμ}
-# ) where {T,P,track,Tμ,Sβ,Nβ,Pβ}
-    ∂Normal_fmadd_dynamic_quote(Y, X, P, T, track, Sβ.parameters, Nβ, Pβ.parameters, Tμ, false)
-end
-@generated function ∂Normal_fmadd(
-    sptr::StackPointer,
-    Y::AbstractMatrix{T},
-    X::AbstractMatrix{T},
-    β::AbstractMutableFixedSizeArray{Sβ,T,Nβ,Pβ},
-    μ::Tμ,
-    L::AbstractLowerTriangularMatrix{P,T},
-    ::Val{track} = Val{(true,true,true,true,true)}()
-# ) where {P,T,track,Sβ,Nβ,Pβ,Tμ}
-) where {T,P,track,Tμ,Sβ,Nβ,Pβ}
-    ∂Normal_fmadd_dynamic_quote(Y, X, P, T, track, Sβ.parameters, Nβ, Pβ.parameters, Tμ, true)
 end
 
 push!(DISTRIBUTION_DIFF_RULES, :Normal_fmadd)
