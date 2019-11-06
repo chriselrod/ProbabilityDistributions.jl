@@ -1039,8 +1039,13 @@ end
     if (track_L && calclogdet) # we'll calculate invdiagL and the logdet in a single loop
         alloc_invdiagL = sp ? :(PtrVector{$P,$T,$P,true}(pointer(sptr,$T))) : :(FixedSizeVector{$P,$T,$P}(undef))
         push!(q.args, :(logdiagL = StructuredMatrices.logdiag(L); invdiagL = $alloc_invdiagL))
-        loopbody = :(invdiagL[p] = invdiagLlazy[p]; δ²_0 = LoopVectorization.SIMDPirates.vadd(δ²_0, logdiagL[p]))
-        push!(q.args, macroexpand(LoopVectorization, :(@vvectorize $T for p ∈ 1:$P; $loopbody end)))
+        loopq = quote
+            @vvectorize $T for p ∈ 1:$P
+                invdiagL[p] = invdiagLlazy[p]
+                δ²_0 = LoopVectorization.SIMDPirates.vadd(δ²_0, logdiagL[p])
+            end
+        end
+        push!(q.args, macroexpand(LoopVectorization, loopq))
     end
     track_L && calclogdet && push!(q.args, :(δ²_0 = SIMDPirates.vmul(δ²_0, SIMDPirates.vbroadcast($V,$(M isa Integer ? T(2M) : :($(T(2))*$T($M)))))))
     arity >= 4 && push!(q.args, :(ptrX = pointer(X); ptrβ = pointer(β)))
@@ -1139,11 +1144,14 @@ end
 
 typeset!(s::Set{Symbol}, sym::Symbol) = push!(s, sym)
 function typeset!(s::Set{Symbol}, arg::Expr)
-    s = Set{Symbol}()
     postwalk(arg) do ex
-        if ex isa Expr && ex.head === :curly
-            for i ∈ 2:length(ex.args)
-                push!(s, ex.args[i])
+        if ex isa Expr
+            if ex.head === :curly
+                for i ∈ 2:length(ex.args)
+                    push!(s, ex.args[i])
+                end
+            elseif ex.head === :(::)
+                ex.args[2] isa Symbol && push!(s, ex.args[2])
             end
         end
         ex
@@ -1171,7 +1179,8 @@ for calclogdet ∈ (true,false)
     for sp ∈ (true,false)
         for trackval ∈ (true,false)
             args = [:(Y::AbstractMutableFixedSizeMatrix{M,P,T,PY}), :(L::AbstractLowerTriangularMatrix{P,T,LL})]
-            track = modify_args!(args, sp, trackval)
+            track, whereargs = modify_args!(args, sp, trackval)
+            # println(whereargs)
             @eval @generated function $dist(
                 $(args...)
             ) where {$(whereargs...)}
@@ -1184,6 +1193,7 @@ for calclogdet ∈ (true,false)
 
             args = [:(Y::AbstractMutableFixedSizeMatrix{M,P,T,PY}), :(μ::Tμ), :(L::AbstractLowerTriangularMatrix{P,T,LL})]
             track, whereargs = modify_args!(args, sp, trackval)
+            # println(whereargs)
             @eval @generated function $dist(
                 $(args...)
             ) where {$(whereargs...)}
@@ -1221,7 +1231,7 @@ for calclogdet ∈ (true,false)
             args = [:(Y::AbstractMutableFixedSizeMatrix{M,P,T,PY}), :(X::AbstractMutableFixedSizeMatrix{M,K_,T,PX}),
                     :(β::AbstractMutableFixedSizeArray{Sβ,T,Nβ,Pβ}), :(μ::Tμ), :(L::AbstractLowerTriangularMatrix{P,T,LL})]
             track, whereargs = modify_args!(args, sp, trackval)
-            @eval @generated @generated function $dist(
+            @eval @generated function $dist(
                 $(args...)
             ) where {$(whereargs...)}
                 @assert Sβ.parameters[1] == K_
@@ -1243,7 +1253,6 @@ for calclogdet ∈ (true,false)
                 end
                 multivariate_normal_SMLT_quote(config)
             end
-
         end
     end
 end
@@ -2232,7 +2241,7 @@ end
         if !cachedchol
             push!(loopprequote.args, :(invdiag_L_lazy = StructuredMatrices.invdiag(L)))
             if !allocate_partials
-                push!(loopprequote.args, :(invdiagL = PtrVector{$P,$T,$(PaddedMatrices.calc_padding(P,T)))))
+                push!(loopprequote.args, :(invdiagL = PtrVector{$P,$T,$(PaddedMatrices.calc_padding(P,T))}))
             end
             push!(loopbody.args, :(invdiagL[p] = invdiag_L_lazy[p]))
         end
@@ -2486,21 +2495,24 @@ function modify_args_∂!(args, allocate_partials, calclogdet)
         end
         push!(whereargs, :track)
     else
-        ∂arg_types = [Symbol(:∂, s, :T) for s ∈ syms]
+        ∂syms = [Symbol(:∂,sym) for sym ∈ syms]
+        ∂arg_types = [Symbol(ps, :T) for ps ∈ ∂syms]
         foreach(pa -> push!(whereargs, pa), ∂arg_types)
-        prepend!(args, [Expr(:(::), s, ∂s) for (s,∂s) ∈ zip(syms, ∂arg_types)])
+        prepend!(args, [Expr(:(::), ∂s, ∂st) for (∂s,∂st) ∈ zip(∂syms, ∂arg_types)])
         ret = quote
-            $([:($ts = $s ==! nothing) for (s,ts) ∈ zip(syms, track_syms)]...)
+            $([:($ts = $(∂a) ==! Nothing) for (∂a,ts) ∈ zip(∂arg_types, tracksyms)]...)
         end
     end
     push!(ret.args, :(config = NormalCholeskyConfiguration{T}()))
     push!(ret.args, :(config.arity = $(length(syms))))
     push!(ret.args, :(config.M = M; config.P = P; config.LL = LL))
     push!(ret.args, :(config.calclogdet = $calclogdet))
-    for (s,ts) ∈ zip(syms, track_syms)
+    for (i,ts) ∈ enumerate(tracksyms)
         push!(ret.args, :(config.$ts = $ts))
-        is = Symbol(:init, s)
-        push!(ret.args, :(config.$is = !isinitialized($s)))
+        if !allocate_partials
+            is = Symbol(:init, syms[i])
+            push!(ret.args, :(config.$is = !isinitialized($(∂syms[i]))))
+        end
     end
     ret, whereargs
 end
@@ -2513,6 +2525,7 @@ for calclogdet ∈ (true, false)
         setup, whereargs = modify_args_∂!(args, allocate_partials, calclogdet)
         for sp ∈ (false, true)
             sp && pushfirst!(args, :(sptr::StackPointer))
+            # println(args)
             @eval @generated function $dist( $(args...) ) where {$(whereargs...)}
                 $setup
                 config.sp = $sp
@@ -2625,7 +2638,7 @@ for calclogdet ∈ (true, false)
                 elseif Tμ <: AbstractVector
                     config.μdim = 1; config.μstride = 1
                 elseif Tμ <: AbstractMutableFixedSizeMatrix
-                    config.μdim = 2; config.μstride =  = (Tμ.parameters[4].parameters[2])::Int
+                    config.μdim = 2; config.μstride = (Tμ.parameters[4].parameters[2])::Int
                 elseif Tμ <: AbstractMatrix
                     μstride = gensym(:μstride)
                     push!(defs_quote.args, :($μstride = stride(μ,2)))
@@ -2683,7 +2696,7 @@ for calclogdet ∈ (true, false)
                 elseif Tμ <: AbstractVector
                     config.μdim = 1; config.μstride = 1
                 elseif Tμ <: AbstractMutableFixedSizeMatrix
-                    config.μdim = 2; config.μstride =  = (Tμ.parameters[4].parameters[2])::Int
+                    config.μdim = 2; config.μstride = (Tμ.parameters[4].parameters[2])::Int
                 elseif Tμ <: AbstractMatrix
                     μstride = gensym(:μstride)
                     push!(defs_quote.args, :($μstride = stride(μ,2)))

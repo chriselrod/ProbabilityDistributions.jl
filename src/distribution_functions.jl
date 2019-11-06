@@ -100,7 +100,7 @@ function Bernoulli_logit_quote(T)
 end
 
 @generated function Bernoulli_logit(
-    ::Val{track} = Val{(false,true)}(),
+    ::Val{track},
     y::BitVector, α::AbstractVector{T}
 ) where {T, track}
     y_is_param, α_is_param = track
@@ -505,7 +505,6 @@ end
             $(Expr(∂ηop, :(∂η[]), ∂ηs))
             vadd(extract_data(target), Base.setindex(vbroadcast(Vec{$W,$T},zero($T)), startget, 1))
         end
-        ret_expr = :(
     end
     if track_L && track_η
         q = quote
@@ -522,7 +521,7 @@ end
             end
             $∂η_q
         end
-        L_uninit && pushfirst!(q.args, :(@inbounds ∂L[1] = 0))
+        L_uninit && pushfirst!(q.args, :(@inbounds ∂L[1] = zero($T)))
     elseif track_L
         q = quote
             $(Expr(:meta,:inline))
@@ -536,7 +535,7 @@ end
             end
             extract_data(target)
         end
-        L_uninit && pushfirst!(q.args, :(@inbounds ∂L[1] = 0))
+        L_uninit && pushfirst!(q.args, :(@inbounds ∂L[1] = zero($T)))
     elseif track_η
         q = quote
             $(Expr(:meta,:inline))
@@ -556,7 +555,7 @@ end
     end
     simplify_expr(q)
 end
-@generated function ∂LKJ(sp::PaddedMatrices.StackPointer, ::Val{track}, L::AbstractLKJCorrCholesky{N,T}, η::T) where {N,T,track}
+@generated function ∂LKJ(sp::PaddedMatrices.StackPointer, ::Val{track}, L::AbstractCorrCholesky{N,T}, η::T) where {N,T,track}
     track_L, track_η = track
     q = quote end
     ret_expr = Expr(:tuple, :target)
@@ -841,7 +840,7 @@ end
 end
 
 @generated function ∂Gamma!(
-    ∂y::∂YN, ∂α:∂ΑN, ∂β::∂ΒN,
+    ∂y::∂YN, ∂α::∂ΑN, ∂β::∂ΒN,
     y::PaddedMatrices.AbstractFixedSizeVector{M,T},
     α::Union{T,<:PaddedMatrices.AbstractFixedSizeVector{M,T}},
     β::Union{T,<:PaddedMatrices.AbstractFixedSizeVector{M,T}}
@@ -1306,8 +1305,8 @@ function lsgg_alloc_quote(
         return quote
             ∂y = Ref{$T}()
             target = ∂lsgg!(uninitialized(∂y),nothing,nothing,nothing,nothing,y,α,ϕ,δ,σ)
+            $(sp ? :(sp, (target, ∂y[])) : :(target, ∂y[]))
         end
-        $(sp ? :(sp, (target, ∂y[])) : :(target, ∂y[]))
     end
 end
 
@@ -1608,7 +1607,7 @@ end
                 s += δik
                 j += 1
             end
-            $(Expr(isinitialized(∂ΑN) ? (+=) : :(=), :(dαv[ji]), :(dtargetdαi - dtargetdαin)))
+            $(Expr(isinitialized(∂ΑN) ? :(+=) : :(=), :(dαv[ji]), :(dtargetdαi - dtargetdαin)))
             if ti > 0
                 demaxv[ti] += dtargetdemaxv
                 ded50v[ti] += dtargetded50v

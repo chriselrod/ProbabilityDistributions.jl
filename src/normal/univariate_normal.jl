@@ -248,36 +248,42 @@ end
 # @eval loop to specify normals
 for yisvec ∈ (true,false)
     if yisvec
-        args = [:(y::AbstractFixedSizeArray{S,T,N,R,L})]
+        args1 = [:(y::AbstractFixedSizeArray{S,T,N,R,L})]
         M = :(univariate_normal_length(S.parameters, N, R.parameters, L))
         whereparams = [:S,:T,:N,:R,:L]
         σisvec = :(σ <: AbstractFixedSizeArray)
     else
-        args = [:(y::T)]
+        args1 = [:(y::T)]
         M = 1
         whereparams = [:T]
         σisvec = false
     end
-    ∂args = [:(∂y::∂YN)]; ∂whereparams = [:∂YN, :∂ΣN]
-    for μ ∈ (true,false)
+    ∂args1 = [:(∂y::∂YN)]; ∂whereparams1 = [:∂YN, :∂ΣN]
+    for μ ∈ (false,true)
         if μ
-            push!(args, ysisvec ? :(μ::Union{T,Int,<:AbstractFixedSizeArray{S,T,N,R,L}}) : :(μ::Union{T,Int}))
+            args2 = push!(copy(args1), yisvec ? :(μ::Union{T,Int,<:AbstractFixedSizeArray{S,T,N,R,L}}) : :(μ::Union{T,Int}))
             track_μ = :(track[2])
             track_σ = :(track[3])
             initμ = :(!isinitialized(∂MN))
-            push!(∂args, :(∂μ::∂MN)); push!(∂whereparams, :∂MN)
+            ∂args2 = push!(copy(∂args1), :(∂μ::∂MN));
+            ∂whereparams2 = push!(copy(∂whereparams1), :∂MN)
+            μisvec = :(μ <: AbstractFixedSizeArray)
         else
+            args2 = args1
+            ∂args2 = ∂args1
+            ∂whereparams2 = ∂whereparams1
             track_μ = false
             track_σ = :(track[2])
             μisvec = nothing
             initμ = :(!isinitialized(false))
+            μisvec = false
         end
-        push!(∂args, :(∂σ::∂ΣN))
-        push!(args, ysisvec ? :(σ::Union{T,Int,<:AbstractFixedSizeArray{S,T,N,R,L}}) : :(σ::Union{T,Int}))
+        ∂args3 = push!(copy(∂args2), :(∂σ::∂ΣN))
+        args3 = push!(copy(args2), yisvec ? :(σ::Union{T,Int,<:AbstractFixedSizeArray{S,T,N,R,L}}) : :(σ::Union{T,Int}))
         for calclogdet ∈ (true,false)
             n = calclogdet ? :Normal : :Normal_kernel
             ∂n = calclogdet ? :∂Normal! : :∂Normal_kernel!
-            @eval @generated function $n(::Val{track}, $(args...)) where {track, $(whereparams...)}
+            @eval @generated function $n(::Val{track}, $(args3...)) where {track, $(whereparams...)}
                 univariate_normal_quote(
                     $M, T, $yisvec, $μisvec, $σisvec,
                     (track[1], $track_μ, $track_σ),
@@ -285,7 +291,7 @@ for yisvec ∈ (true,false)
                     false, $calclogdet
                 )
             end
-            @eval @generated function $∂n($(∂args...), $(args...)) where ${$(∂whereparams...), $(whereparams...)}
+            @eval @generated function $∂n($(∂args3...), $(args3...)) where {$(∂whereparams2...), $(whereparams...)}
                 univariate_normal_quote(
                     $M, T, $yisvec, $μisvec, $σisvec,
                     (track[1], $track_μ, $track_σ),
