@@ -11,8 +11,9 @@ using PaddedMatrices:
     
 using ScatteredArrays: AbstractScatteredArray
 using StructuredMatrices: AbstractAutoregressiveMatrix, AbstractLowerTriangularMatrix
-using DistributionParameters: AbstractCorrCholesky, AbstractCovarCholesky, AbstractFixedSizeCovarianceMatrix
+using DistributionParameters: AbstractCorrCholesky, AbstractCovarCholesky, AbstractFixedSizeCovarianceMatrix, invdiag, logdiag
 using VectorizationBase: pick_vector_width, pick_vector_width_shift
+using ReverseDiffExpressionsBase: isinitialized
 using MacroTools: postwalk
 
 function return_expression(return_expr)

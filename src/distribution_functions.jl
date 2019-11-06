@@ -67,7 +67,7 @@ push!(FMADD_DISTRIBUTIONS, :Bernoulli_logit)
 # """
 # Arguments are: y, logitθ
 # """
-# function ∂Bernoulli_logit_fmadd_quote(y_is_param, β_is_param, X_is_param, α_is_param)
+# function ∂Bernoulli_logit_quote(y_is_param, β_is_param, X_is_param, α_is_param)
 #     @assert y_is_param == false
 #     quote
 #         T = promote_type(eltype(α, X, β))
@@ -299,7 +299,7 @@ end
 push!(DISTRIBUTION_DIFF_RULES, :Binomial_logit)
 
 #::Val{track} = Val{(false,false,true,true)}()
-@generated function Bernoulli_logit_fmadd(
+@generated function Bernoulli_logit(
     ::Val{track}, y::BitVector, X::AbstractMatrix{T}, β::AbstractVector{T}, α::AbstractFloat
 ) where {T, track}
     y_is_param, β_is_param, X_is_param, α_is_param = track
@@ -334,8 +334,8 @@ push!(DISTRIBUTION_DIFF_RULES, :Binomial_logit)
     end
     simplify_expr(q)
 end
-Bernoulli_logit_fmadd_constant(y, X, β, α, ::Any) = zero(eltype(β))
-@generated function ∂Bernoulli_logit_fmadd!(
+Bernoulli_logit_constant(y, X, β, α, ::Any) = zero(eltype(β))
+@generated function ∂Bernoulli_logit!(
     ::Nothing, ::Nothing, ∂β::∂Β, ∂α::∂Α,
     y::BitVector, X::AbstractMatrix{T}, β::AbstractVector{T}, α::AbstractFloat,
 ) where {T, ∂Β, ∂Α}
@@ -422,7 +422,7 @@ Bernoulli_logit_fmadd_constant(y, X, β, α, ::Any) = zero(eltype(β))
     simplify_expr(q)
 end
 
-push!(DISTRIBUTION_DIFF_RULES, :Bernoulli_logit_fmadd)
+push!(DISTRIBUTION_DIFF_RULES, :Bernoulli_logit)
 
 @generated function LKJ(::Val{track}, L::AbstractCorrCholesky{N,T}, η::T) where {N,T,track}
     W = VectorizationBase.pick_vector_width(N-1,T)
@@ -437,7 +437,7 @@ push!(DISTRIBUTION_DIFF_RULES, :Bernoulli_logit_fmadd)
         q = quote
             $(Expr(:meta,:inline))
             target = vbroadcast(SVec{$W,$T}, zero($T))
-            logd = DistributionParameters.logdiag(L)
+            logd = logdiag(L)
             @vvectorize $T for n ∈ 1:$(rem1 ? N-1 : N)
                 target = vfmadd( ($(N - 3) - n + 2η), logd[$(rem1 ? :(n+1) : :n)], target)
             end
@@ -510,7 +510,7 @@ end
         q = quote
             $(Expr(:meta,:inline))
             target = vbroadcast(SVec{$W,$T}, zero($T))
-            logd = DistributionParameters.logdiag(L)
+            logd = logdiag(L)
             ∂ηs = zero($T)
             @vvectorize $T for n ∈ 1:$(N-1)
                 ∂ηₙ = logd[n+1]
@@ -526,7 +526,7 @@ end
         q = quote
             $(Expr(:meta,:inline))
             target = vbroadcast(SVec{$W,$T}, zero($T))
-            logd = DistributionParameters.logdiag(L)
+            logd = logdiag(L)
             @vvectorize $T for n ∈ 1:$(N-1)
                 ∂ηₙ = logd[n+1]
                 coef = ($(N - 3) - n + 2η)
@@ -540,7 +540,7 @@ end
         q = quote
             $(Expr(:meta,:inline))
             target = vbroadcast(SVec{$W,$T}, zero($T))
-            logd = DistributionParameters.logdiag(L)
+            logd = logdiag(L)
             ∂ηs = zero($T)
             @vvectorize $T for n ∈ 1:$(N-1)
                 ∂ηₙ = logd[n+1]
