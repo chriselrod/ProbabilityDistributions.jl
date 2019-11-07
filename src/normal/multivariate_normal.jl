@@ -953,7 +953,7 @@ end
     else
         quote end
     end
-    if col_rem > 0
+    if col_rem > 0# col_rem > 0 may be the failpoint??? TODO try different row_rem to try and isolate failure
         loadδ_expr = load_δ_expr(config, Mk, col_rem, 0, μsym, true, maskrowiter)
         iter_quote = if maskrowiter
             StructuredMatrices.A_rdiv_U_kernel_quote(
@@ -969,10 +969,8 @@ end
         push!(row_iter.args, iter_quote)
         push!(row_iter.args, :(ptrUdiag += $(col_rem*size_T)))
         base_K = col_rem
-        KmZ = false
     else
         base_K = 0
-        KmZ = true
     end
     if n_col_reps > 1
         loadδ_expr = load_δ_expr(config, Mk, Nk, :K, μsym, true, maskrowiter)
@@ -997,6 +995,7 @@ end
         end
         push!(row_iter.args, row_iter_loop)
     elseif n_col_reps == 1
+        # push!(row_iter.args, :(ptrUtri = ptrUtribase + $col_rem*$size_T)) # wasn't used for grad, so adding this probably will not fix
         loadδ_expr = load_δ_expr(config, Mk, Nk, col_rem, μsym, true, maskrowiter)
         push!(row_iter.args, loadδ_expr)
         row_iter_single = if maskrowiter
@@ -1030,7 +1029,8 @@ end
     preloopquote = if last(DistributionParameters.caches_invdiag(P, LL, T))
         quote invdiagL = invdiag(L) end
     elseif !(calclogdet && track_L)
-        alloc_invdiagL = sp ? :(PtrVector{$P,$T,$P,true}(pointer(sptr,$T))) : :(FixedSizeVector{$P,$T,$P}(undef))
+        # alloc_invdiagL = sp ? :(PtrVector{$P,$T,$P,true}(pointer(sptr,$T))) : :(FixedSizeVector{$P,$T,$P}(undef))
+        alloc_invdiagL = sp ? :(PtrVector{$P,$T,$P,true}(pointer(sptr,$T))) : :(PtrVector{$P,$T,$P}(SIMDPirates.alloca(Val{$P}(), $T)))
         quote invdiagL = copyto!($alloc_invdiagL, invdiag(L)) end
     else
         quote invdiagLlazy = invdiag(L) end
@@ -1044,20 +1044,22 @@ end
         $preloopquote
     end
     if (track_L && calclogdet) # we'll calculate invdiagL and the logdet in a single loop
-        alloc_invdiagL = sp ? :(PtrVector{$P,$T,$P,true}(pointer(sptr,$T))) : :(FixedSizeVector{$P,$T,$P}(undef))
+        # alloc_invdiagL = sp ? :(PtrVector{$P,$T,$P,true}(pointer(sptr,$T))) : :(FixedSizeVector{$P,$T,$P}(undef))
+        alloc_invdiagL = sp ? :(PtrVector{$P,$T,$P,true}(pointer(sptr,$T))) : :(PtrVector{$P,$T,$P}(SIMDPirates.alloca(Val{$P}(),$T)))
         push!(q.args, :(logdiagL = logdiag(L); invdiagL = $alloc_invdiagL))
         loopq = quote
             @vvectorize $T for p ∈ 1:$P
                 invdiagL[p] = invdiagLlazy[p]
                 δ²_0 = LoopVectorization.vadd(δ²_0, logdiagL[p])
             end
+            δ²_0 = vmul(δ²_0, vbroadcast($V,$(M isa Integer ? T(2M) : :($(T(2))*$T($M)))))
         end
         push!(q.args, macroexpand(LoopVectorization, loopq))
     end
-    track_L && calclogdet && push!(q.args, :(δ²_0 = vmul(δ²_0, vbroadcast($V,$(M isa Integer ? T(2M) : :($(T(2))*$T($M)))))))
     arity >= 4 && push!(q.args, :(ptrX = pointer(X); ptrβ = pointer(β)))
     Aquote = quote
-        A = $(sp ? :(PtrMatrix{$Mk,$P,$T,$Mk}(pointer(sptr,$T) + $(VectorizationBase.align(size_T*P)))) : :(FixedSizeMatrix{$Mk,$P,$T,$Mk}(undef)))
+        # A = $(sp ? :(PtrMatrix{$Mk,$P,$T,$Mk}(pointer(sptr,$T) + $(VectorizationBase.align(size_T*P)))) : :(FixedSizeMatrix{$Mk,$P,$T,$Mk}(undef)))
+        A = $(sp ? :(PtrMatrix{$Mk,$P,$T,$Mk}(pointer(sptr,$T) + $(VectorizationBase.align(size_T*P)))) : :(PtrMatrix{$Mk,$P,$T,$Mk}(SIMDPirates.alloca(Val{$P}(),$T))))
         ptrA = pointer(A)
     end
     total_col_iterations > 1 && push!(q.args, Aquote)
@@ -1072,7 +1074,6 @@ end
     uniqueμbyrow && push!(loop_increments.args, :( ptrμ += $(size_T*Mk) ))
     if M isa Integer
         n_row_reps, row_rem = divrem(M, Mk)
-        total_row_iterations = n_row_reps + (row_rem > 0)
         Mk1 = n_row_reps == 0 ? row_rem : Mk
         row_iter = mutlivariate_normal_SMLT_rowiter(
             config, Mk1, Nk, col_rem, n_col_reps, :ptrμ, Mk
@@ -1096,12 +1097,12 @@ end
         end
     else # Unknown number of iterations.
         row_iter = mutlivariate_normal_SMLT_rowiter(
-            config, Mk, Nk, col_rem, n_col_reps, :ptrμ
+            config, Mk, Nk, col_rem, n_col_reps, :ptrμ, Mk
         )
         Wrem, Mkrem, Nkrem = StructuredMatrices.div_triangle_blocking_structure(W, P, T)
         n_col_repsrem, col_remrem = divrem(P, Nkrem)
         row_iter_onevec = mutlivariate_normal_SMLT_rowiter(
-            config, W, Nkrem, col_remrem, n_col_repsrem, :ptrμ
+            config, W, Nkrem, col_remrem, n_col_repsrem, :ptrμ, W
         )
         row_iter_onevecmask = mutlivariate_normal_SMLT_rowiter(
             config, -1, Nkrem, col_remrem, n_col_repsrem, :ptrμ, W
@@ -1684,15 +1685,15 @@ function load_δ_expr(
             )
         else
             loadδfnmadd_quote(
-                Mk, Nk, K, T, Ystride, Xstride, βstride, βdim,
+                Mk,             Nk, K, T, Ystride, Xstride, βstride, βdim,
                 :ptrY, :ptrX, :ptrβ, :ptrμ, true, μmy, XP, μstride, μdim, μtransposed
             )
         end
     else
         if maskrowiter
-            loadδ_expr = loadδ_quote(:row_rem_final, Nk, K, T, Ystride, :ptrY, μdim, μstride, μsym, true, μmy, μtransposed)
+            loadδ_quote(:row_rem_final, Nk, K, T, Ystride, :ptrY, μdim, μstride, μsym, true, μmy, μtransposed)
         else
-            loadδ_expr = loadδ_quote(Mk, Nk, K, T, Ystride, :ptrY, μdim, μstride, μsym, true, μmy, μtransposed)
+            loadδ_quote(Mk,             Nk, K, T, Ystride, :ptrY, μdim, μstride, μsym, true, μmy, μtransposed)
         end
     end
 end
@@ -1739,10 +1740,8 @@ end
         push!(row_iter.args, iter_quote)
         push!(row_iter.args, :(ptrUdiag += $(col_rem*size_T)))
         base_K = col_rem
-        KmZ = false
     else
         base_K = 0
-        KmZ = true
     end
     if n_col_reps > 1
         loadδ_expr = load_δ_expr(config, Mk, Nk, :K, μsym, μmy, maskrowiter)
@@ -1811,10 +1810,8 @@ end
         end
         push!(row_iter.args, loop_pointer_increments(config, Nk, col_rem, col_rem, W, Astride))
         base_K = col_rem
-        KmZ = false
     else
         base_K = 0
-        KmZ = true
     end
     loop_ptr_increments = loop_pointer_increments(config, Nk, Nk, :K, W, Astride)
     if n_col_reps > 1
@@ -2468,7 +2465,6 @@ end
     track = (track_Y, track_X, track_β, track_μ, track_L)
     if M isa Integer
         n_row_reps, row_rem = divrem(M, Mk)
-        total_row_iterations = n_row_reps + (row_rem > 0)
         Mk1 = n_row_reps == 0 ? row_rem : Mk
         row_iter = ∂mutlivariate_normal_SMLT_rowiter(
             config, Mk1, Nk, col_rem, n_col_reps, μmy, :ptrμ, Astride
