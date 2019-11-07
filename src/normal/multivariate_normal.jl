@@ -995,7 +995,7 @@ end
         end
         push!(row_iter.args, row_iter_loop)
     elseif n_col_reps == 1
-        # push!(row_iter.args, :(ptrUtri = ptrUtribase + $col_rem*$size_T)) # wasn't used for grad, so adding this probably will not fix
+        push!(row_iter.args, :(ptrUtri = ptrUtribase + $col_rem*$size_T)) # not sure if this is correct. Bug somewhere
         loadδ_expr = load_δ_expr(config, Mk, Nk, col_rem, μsym, true, maskrowiter)
         push!(row_iter.args, loadδ_expr)
         row_iter_single = if maskrowiter
@@ -1768,6 +1768,7 @@ end
     elseif n_col_reps == 1
         loadδ_expr = load_δ_expr(config, Mk, Nk, col_rem, μsym, μmy, maskrowiter)
         push!(row_iter.args, loadδ_expr)
+        push!(row_iter.args, :(ptrUtri = ptrUtribase + $col_rem*$size_T))
         row_iter_single = if maskrowiter
             StructuredMatrices.A_rdiv_U_kernel_quote(
                 :row_rem_final, Nk, col_rem, T, Astride, Ystride, N, true, true, storeA = true, loadB = false, reduce_sym = :δ² # storeA = col_rem > 0
@@ -2351,6 +2352,7 @@ end
     @unpack initY, initX, initβ, initμ, initL = config
     maxM = M isa Symbol ? typemax(Int) : M
     W, Mk, Nk = StructuredMatrices.div_ul_blocking_structure(maxM, P, T)
+    # @show W, Mk, Nk, maxM, P
     V = Vec{W,T}
     Wm1 = W - 1
     n_col_reps, col_rem = divrem(P, Nk)
