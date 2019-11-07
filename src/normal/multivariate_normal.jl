@@ -1025,7 +1025,7 @@ end
     Wm1 = W - 1
     n_col_reps, col_rem = divrem(P, Nk)
     size_T = sizeof(T)
-    preloopquote = if last(DistributionParameters.caches_invdiag(P, LL, T))
+    preloopquote = if first(DistributionParameters.caches_invdiag(P, LL, T))
         quote invdiagL = invdiag(L) end
     elseif !(calclogdet && track_L)
         # alloc_invdiagL = sp ? :(PtrVector{$P,$T,$P,true}(pointer(sptr,$T))) : :(FixedSizeVector{$P,$T,$P}(undef))
@@ -2208,7 +2208,7 @@ end
             push!(Aquote.args, :(A = DynamicPtrMatrix{$T}(_sptr, ($M, $P), _A_stride_)))
             push!(Aquote.args, :(_sptr += $size_T*$P*_A_stride_))
         else
-            push!(Aquote.args, :(DynamicPaddedMatrix{$T}(undef, ($M, $P), _A_stride_)))
+            push!(Aquote.args, :(A = DynamicPaddedMatrix{$T}(undef, ($M, $P), _A_stride_)))
         end
     end
     Aquote, Astride::Union{Symbol,Int}
@@ -2421,7 +2421,7 @@ end
     else
         array_allocations, Astride = allocate_temporaries_quote!(row_increments, row_increments_rem, config, W, Mk, Nk, invdiagLL)
     end
-    cachedchol = last(DistributionParameters.caches_invdiag(P, LL, T))
+    cachedchol = first(DistributionParameters.caches_invdiag(P, LL, T))
     if cachedchol
         push!(array_allocations.args, :(invdiagL = invdiag(L)))
     elseif !(track_L && calclogdet)
@@ -2787,10 +2787,10 @@ for calclogdet ∈ (true, false)
                 βstride = length(Pβ.parameters) == 1 ? K_ : (Pβ.parameters[2])::Int
                 $setup
                 config.sp = $sp; config.Ystride = PY; config.Xstride = PX; config.βstride = βstride; config.βdim = Nβ; config.XP = K_
-                config = if Tμ === T
+                if Tμ === T
                     config.μdim = 0; config.μstride = 0
                 elseif Tμ <: LinearAlgebra.Adjoint{T,<:AbstractMutableFixedSizeVector}
-                    config.μdim = 1; config.μstride = 1; config.μtransposed
+                    config.μdim = 1; config.μstride = 1; config.μtransposed = true
                 elseif Tμ <: AbstractMutableFixedSizeVector
                     config.μdim = 1; config.μstride = 1
                 elseif Tμ <: AbstractMutableFixedSizeMatrix
@@ -2888,6 +2888,7 @@ for calclogdet ∈ (true, false)
             sp && pushfirst!(args, :(sptr::StackPointer))
             @eval @generated function $dist( $(args...) ) where {$(whereargs...)}
                 M, PY, PX = gensym(:M), gensym(:PY), gensym(:PX)
+                Sβv = Sβ.parameters; Pβv = Pβ.parameters
                 K_ = (Sβv[1])::Int
                 defs_quote = quote
                     $M = size(Y,1)
@@ -2895,7 +2896,7 @@ for calclogdet ∈ (true, false)
                     $PX = $(X <: Array ? M : :(stride(X,2)))
                 end
                 $setup
-                config.sp = $sp; config.Ystride = PY; config.Xstride = PX; config.βstride = βstride; config.βdim = Nβ; config.XP = K_
+                config.sp = $sp; config.Ystride = PY; config.Xstride = PX; config.βdim = Nβ; config.XP = K_
                 config.βstride = length(Pβv) == 1 ? K_ : (Pβv[2])::Int
                 if Tμ === T
                     config.μdim = 0; config.μstride = 0

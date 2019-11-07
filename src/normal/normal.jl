@@ -1,4 +1,7 @@
 
+using StructuredMatrices: nlogdet
+using ReverseDiffExpressionsBase: tadd
+
 """
 σ⁻²   : multiply with δ² / -2 to get kernel-component of density
 ld    : multiply with -logdet_coef to get logdet component of density
@@ -15,6 +18,7 @@ end
     # σ⁻²::P
     # logσ::L
 # end
+using ReverseDiffExpressionsBase: One, Zero
 
 @inline logdet_coef(Y, args...) = Float64(size(Y, 1))
 @inline function canonicalize_Σ(σ::Real)
@@ -28,7 +32,7 @@ end
     # nσ⁻¹ = Base.FastMath.sub_fast( σ⁻¹ )
     Precision( σ⁻², log(σ), σ⁻¹ )
 end
-@inline precision(v) = SIMDPirates.vabs2(SIMDPirates.vinv(x))
+@inline precision(v) = SIMDPirates.vabs2(SIMDPirates.vinv(v))
 @inline function canonicalize_Σ(σ::AbstractFixedSizeArray)
     σ⁻² = LazyMap( precision, σ )
     logσ = LazyMap( SLEEFPirates.log, σ )
@@ -53,27 +57,30 @@ end
         σ⁻², Base.FastMat.div_fast(Base.log(σ⁻²),2), nothing
     )
 end
-@inline Base.inv(σ::Union{Precision,PrecisionArray}) = σ.σ⁻¹
-@inline SIMDPirates.vinv(σ::Union{Precision,PrecisionArray}) = σ.σ⁻¹
-@inline loginvroot(σ::Union{Precision,PrecisionArray}) = σ.logσ
+@inline Base.inv(σ::Precision) = σ.σ⁻¹
+@inline SIMDPirates.vinv(σ::Precision) = σ.σ⁻¹
+@inline loginvroot(σ::Precision) = σ.logσ
+# @inline Base.inv(σ::Union{Precision,PrecisionArray}) = σ.σ⁻¹
+# @inline SIMDPirates.vinv(σ::Union{Precision,PrecisionArray}) = σ.σ⁻¹
+# @inline loginvroot(σ::Union{Precision,PrecisionArray}) = σ.logσ
 
 @inline precision(λ::Precision) = λ.σ⁻²
 @inline precision(::One) = One()
 @inline LinearAlgebra.logdet(λ::Precision) = λ.ld
-@inline PaddedMatrices.nlogdet(λ::Precision) = Base.FastMath.sub_fast(λ.ld)
+@inline StructuredMatrices.nlogdet(λ::Precision) = Base.FastMath.sub_fast(λ.ld)
 @inline LinearAlgebra.logdet(::One) = Zero()
-@inline PaddedMatrices.nlogdet(::One) = Zero()
+@inline StructuredMatrices.nlogdet(::One) = Zero()
 @inline ∂k∂i(λ::Precision) = λ.∂k∂i
-@inline ∂k∂i(λ::Precision{T,Nothing}) = Base.FastMath.mul_fast(T(0.5), λ.σ⁻²) # Variance
-@inline ∂ld∂i(λ::Precision{T,Nothing}) = Base.FastMath.mul_fast(T(0.5), λ.σ⁻²) # Variance
+@inline ∂k∂i(λ::Precision{T,Nothing}) where {T} = Base.FastMath.mul_fast(T(0.5), λ.σ⁻²) # Variance
+@inline ∂ld∂i(λ::Precision{T,Nothing}) where {T} = Base.FastMath.mul_fast(T(0.5), λ.σ⁻²) # Variance
 @inline ∂ld∂i(λ::Precision{T,P}) where {T,P<:Real} = λ.∂k∂i # St.Dev
 
 """
 The normal distribution can be split into
 Normal(args...) = Normal_kernel(args...) + logdet_coef(args...)*logdet(last(args))
 """
-Normal(y) = normal_kernel(y)
-Normal(::Val{track}, y) where {track} = (first(track) == true ? normal_kernel(y) : Zero())
+Normal(y) = Normal_kernel(y)
+Normal(::Val{track}, y) where {track} = (first(track) == true ? Normal_kernel(y) : Zero())
 ∂Normal!(∂y, y) = ∂Normal_kernel!(∂y, y)
 function Normal(::Val{track}, args...) where {track}
     fargs = Base.front(args)

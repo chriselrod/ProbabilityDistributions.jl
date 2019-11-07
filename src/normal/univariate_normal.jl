@@ -1,12 +1,13 @@
 
+
 @inline logdet_coef(y::AbstractFixedSizeVector, ::Any, σ::AbstractFixedSizeVector) = One()
 
-function univariate_normal_kernel_quote(
+function univariate_normal_quote(
     M::Int, @nospecialize(T), yisvec::Bool,
     @nospecialize(μisvec::Union{Bool,Nothing}), @nospecialize(σisvec::Union{Bool,Nothing}),
     (track_y, track_μ, track_σ)::NTuple{3,Bool},
     (inity, initμ, initσ)::NTuple{3,Bool},
-    partial::Bool, calclogdet::Bool = false, @nospecialize(S) = Tuple{M}
+    partial::Bool, calclogdet::Bool = false
 )
     if M > 1
         pre_quote = quote
@@ -32,6 +33,10 @@ function univariate_normal_kernel_quote(
         δexpr = :($yexpr - μ)
     end
     # add target
+    # @show M, T, yisvec, μisvec, σisvec
+    # @show track_y, track_μ, track_σ
+    # @show inity, initμ, initσ
+    # @show partial, calclogdet
     if σisvec === nothing
         # push!(pre_quote.args, :(σ⁻¹ = One() ))
         loop_expr = quote
@@ -64,7 +69,7 @@ function univariate_normal_kernel_quote(
         else
             loop_expr = quote
                 δ = $δexpr
-                δσ⁻² = δ * σ⁻2
+                δσ⁻² = δ * σ⁻²
                 qf = vfmadd(δσ⁻², δ, qf)
             end
         end
@@ -78,9 +83,9 @@ function univariate_normal_kernel_quote(
     end
     if !σisvec && calclogdet && track_σ
         if M == 1
-            push!(retun_expr.args, :(nld = nlogdet(σ)))
+            push!(return_expr.args, :(nld = nlogdet(σ)))
         else
-            push!(retun_expr.args, :(nld = vmul($(T(M)), nlogdet(σ))))
+            push!(return_expr.args, :(nld = vmul($(T(M)), nlogdet(σ))))
         end
     end
     if partial
@@ -138,7 +143,7 @@ function univariate_normal_kernel_quote(
             end
         end
     end
-    if calclogdet
+    if calclogdet && track_σ
         if yisvec && !σisvec
             retex = :(tadd(vmul($(T(-0.5)), qf), nld))
         else # either both isvec, or neither
@@ -243,7 +248,21 @@ end
     t
 end
 @inline ∂Normal!(::Nothing, y::T) where {T <: Real} = zero(T)
-
+@generated function Normal_kernel(x::AbstractFixedSizeArray{S,T,N,X,L}) where {S,T,N,X,L}
+    P = univariate_normal_length(S.parameters, N, X.parameters, L)
+    V = VectorizationBase.pick_vector(P,T)
+    quote
+        $(Expr(:meta,:inline))
+        target = vbroadcast($V, zero($T))
+        @vvectorize $T 4 for p ∈ 1:$P
+            target = vmuladd(x[p], x[p], target)
+        end
+        vmul(target, vbroadcast($V, $(T(-0.5))))
+    end
+end
+@inline function Normal_kernel(::Val{track}, x::AbstractFixedSizeArray{S,T}) where {S,T,track}
+    first(track) ? Normal_kernel(x) : Zero()
+end
 
 # @eval loop to specify normals
 for yisvec ∈ (true,false)
@@ -263,38 +282,39 @@ for yisvec ∈ (true,false)
         if μ
             args2 = push!(copy(args1), yisvec ? :(μ::Union{T,Int,<:AbstractFixedSizeArray{S,T,N,R,L}}) : :(μ::Union{T,Int}))
             track_μ = :(track[2])
-            track_σ = :(track[3])
             initμ = :(!isinitialized(∂MN))
             ∂args2 = push!(copy(∂args1), :(∂μ::∂MN));
             ∂whereparams2 = push!(copy(∂whereparams1), :∂MN)
             μisvec = :(μ <: AbstractFixedSizeArray)
+            ∂track_μ = :(∂MN !== Nothing)
         else
             args2 = args1
             ∂args2 = ∂args1
             ∂whereparams2 = ∂whereparams1
             track_μ = false
-            track_σ = :(track[2])
             μisvec = nothing
-            initμ = :(!isinitialized(false))
-            μisvec = false
+            initμ = false
+            ∂track_μ = false
         end
         ∂args3 = push!(copy(∂args2), :(∂σ::∂ΣN))
         args3 = push!(copy(args2), yisvec ? :(σ::Union{T,Int,<:AbstractFixedSizeArray{S,T,N,R,L}}) : :(σ::Union{T,Int}))
+        # @show μ, args3, μisvec
         for calclogdet ∈ (true,false)
             n = calclogdet ? :Normal : :Normal_kernel
             ∂n = calclogdet ? :∂Normal! : :∂Normal_kernel!
             @eval @generated function $n(::Val{track}, $(args3...)) where {track, $(whereparams...)}
                 univariate_normal_quote(
                     $M, T, $yisvec, $μisvec, $σisvec,
-                    (track[1], $track_μ, $track_σ),
+                    (first(track), $track_μ, last(track)),
                     (false, false, false),
                     false, $calclogdet
                 )
             end
+            
             @eval @generated function $∂n($(∂args3...), $(args3...)) where {$(∂whereparams2...), $(whereparams...)}
                 univariate_normal_quote(
                     $M, T, $yisvec, $μisvec, $σisvec,
-                    (track[1], $track_μ, $track_σ),
+                    (∂YN !== Nothing, $∂track_μ, ∂ΣN !== Nothing),
                     (!isinitialized(y), $initμ, !isinitialized(σ)),
                     true, $calclogdet
                 )

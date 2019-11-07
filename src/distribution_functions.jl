@@ -26,23 +26,22 @@ function distribution_diff_rule!(mod, first_pass, second_pass, tracked_vars, out
             continue
         end
         track_out = true
-        # ∂ = Symbol("##∂", out, "/∂", a, "##")
-        push!(function_call.args, adj(out, a))
-        # pushfirst!(second_pass.args, :( $mod.RESERVED_INCREMENT_SEED_RESERVED!($(Symbol("##∂target/∂", a, "##")), $∂, $(Symbol("##∂target/∂", out, "##")))))
+        # push!(function_call.args, adj(out, a))
+        push!(function_call.args, adj(a)) # ∂target/∂a
     end
     append!(function_call.args, A)
     if track_out
-        push!(tracked_vars, out)
+        # push!(tracked_vars, out)
         if verbose
             printstring = "distribution $f (ret: $out): "
             push!(first_pass.args, :(println($printstring)))
         end
         # push!(first_pass.args, :($function_output = $(mod).ProbabilityDistributions.$(Symbol(:∂, f))($(A...), Val{$track_tup}())))
-        push!(first_pass.args, function_call)
+        push!(first_pass.args, Expr(:(=), out, function_call))
         if verbose
-            push!(first_pass.args, :(($out isa AbstractArray) ? ((length($out) < 100) && (@show $out)) : @show $out))
+            push!(first_pass.args, :(@show $out))
             for a ∈ A
-                a ∈ tracked_vars && push!(first_pass.args, :(@show $(adj(out, a))))
+                a ∈ tracked_vars && push!(first_pass.args, :(@show $(adj(a))))
             end
         end
     end
@@ -580,7 +579,7 @@ push!(DISTRIBUTION_DIFF_RULES, :LKJ)
 function gamma_quote(
     M::Int, T, (yisvec, αisvec, βisvec)::NTuple{3,Bool},
     (track_y, track_α, track_β)::NTuple{3,Bool}, partial::Bool,
-    (inity, initα, initβ)::NTuple{3,Bool}
+    (inity, initα, initβ)::NTuple{3,Bool} = (true,true,true)
 )
     q = quote end
     pre_quote = quote end
@@ -836,7 +835,7 @@ end
 #) where {track,T,M}
     αisvec = isa(α, PaddedMatrices.AbstractFixedSizeVector)
     βisvec = isa(β, PaddedMatrices.AbstractFixedSizeVector)
-    gamma_quote(M, T, (true, αisvec, βisvec), track, false, false)
+    gamma_quote(M, T, (true, αisvec, βisvec), track, false)
 end
 
 @generated function ∂Gamma!(

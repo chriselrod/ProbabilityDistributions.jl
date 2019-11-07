@@ -25,9 +25,10 @@ function return_expression(return_expr, sp::Bool, spexpr = :sp)
 end
 
 include("distribution_functions.jl")
+include("normal/normal.jl")
 include("normal/univariate_normal.jl")
 include("normal/multivariate_normal.jl")
-include("normal/matrix_normal.jl")
+# include("normal/matrix_normal.jl")
 
 # const STACK_POINTER_SUPPORTED_METHODS = Set{Symbol}()
 @def_stackpointer_fallback ∂lsgg ∂Gamma ∂LKJ Normal ∂Normal Normal_fmadd ∂Normal_fmadd ∂Beta ∂Bernoulli_logit ∂Binomial_logit #∂EₘₐₓNMA
