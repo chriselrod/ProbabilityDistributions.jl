@@ -933,24 +933,37 @@ end
 end
 
 @noinline function mutlivariate_normal_SMLT_rowiter(
-    Mk::Union{Int,Symbol}, Nk::Int, col_rem::Int, T::DataType, Ystride::Union{Int,Symbol}, n_col_reps::Int, μdim::Int = -1, μstride::Union{Int,Symbol} = -1,
-    μsym::Symbol = :ptrμ, XP::Int = -1, βstride::Int = -1, Xstride::Union{Int,Symbol} = -1, βdim::Int = -1, μtransposed::Bool = false
-)
+    config::NormalCholeskyConfiguration{T}, Mk::Int, Nk::Int, col_rem::Int, n_col_reps::Int, μsym::Symbol = :ptrμ, Astride::Int = Mk
+) where {T}
+    @unpack Ystride, XP, βstride, Xstride, βdim, μtransposed, μstride, μdim = config
     N = Nk * n_col_reps + col_rem
     size_T = sizeof(T)
-    row_iter = (βdim == 1 && XP > 0) ? Xβ_load_quote(Mk, T, Xstride, βstride, false, XP, :ptrX, :ptrβ) : quote end
+    if Mk == -1
+        Mk = Astride
+        maskrowiter = true
+    else
+        maskrowiter = false
+    end
+    row_iter = if (βdim == 1 && XP > 0)
+        if maskrowiter
+            Xβ_load_quote(:row_rem_final, T, Xstride, βstride, false, XP, :ptrX, :ptrβ)
+        else
+            Xβ_load_quote(Mk, T, Xstride, βstride, false, XP, :ptrX, :ptrβ)
+        end
+    else
+        quote end
+    end
     if col_rem > 0
-        if XP > 0
-            loadδ_expr = loadδfnmadd_quote(
-                Mk, col_rem, 0, T, Ystride, Xstride, βstride, βdim,
-                :ptrY, :ptrX, :ptrβ, :ptrμ, true, false, XP, μstride, μdim, μtransposed
+        loadδ_expr = load_δ_expr(config, Mk, col_rem, 0, μsym, true, maskrowiter)
+        iter_quote = if maskrowiter
+            StructuredMatrices.A_rdiv_U_kernel_quote(
+                :row_rem_final, col_rem, 0, T, Astride, Ystride, N, true, true, storeA = n_col_reps > 0, loadB = false, reduce_sym = :δ²
             )
         else
-            loadδ_expr = loadδ_quote(Mk, col_rem, 0, T, Ystride, :ptrY, μdim, μstride, μsym, true, true, μtransposed)
+            StructuredMatrices.A_rdiv_U_kernel_quote(
+                Mk, col_rem, 0, T, Astride, Ystride, N, true, true, storeA = n_col_reps > 0, loadB = false, reduce_sym = :δ²
+            )
         end
-        iter_quote = StructuredMatrices.A_rdiv_U_kernel_quote(
-            Mk, col_rem, 0, T, Mk, Ystride, N, true, true, storeA = n_col_reps > 0, loadB = false, reduce_sym = :δ²
-        )
         #pushfirst!(row_iter.args, :(ptrUtri = ptrUtribase))
         push!(row_iter.args, loadδ_expr)
         push!(row_iter.args, iter_quote)
@@ -962,17 +975,16 @@ end
         KmZ = true
     end
     if n_col_reps > 1
-        if XP > 0
-            loadδ_expr = loadδfnmadd_quote(
-                Mk, Nk, :K, T, Ystride, Xstride, βstride, βdim,
-                :ptrY, :ptrX, :ptrβ, :ptrμ, true, false, XP, μstride, μdim, μtransposed
+        loadδ_expr = load_δ_expr(config, Mk, Nk, :K, μsym, true, maskrowiter)
+        iterquote = if maskrowiter
+            StructuredMatrices.A_rdiv_U_kernel_quote(
+                :row_rem_final, Nk, :K, T, Astride, Ystride, N, true, true, storeA = true, loadB = false, reduce_sym = :δ²
             )
         else
-            loadδ_expr = loadδ_quote(Mk, Nk, :K, T, Ystride, :ptrY, μdim, μstride, μsym, true, true, μtransposed)
+            StructuredMatrices.A_rdiv_U_kernel_quote(
+                Mk, Nk, :K, T, Astride, Ystride, N, true, true, storeA = true, loadB = false, reduce_sym = :δ²
+            )
         end
-        iterquote = StructuredMatrices.A_rdiv_U_kernel_quote(
-            Mk, Nk, :K, T, Mk, Ystride, N, true, true, storeA = true, loadB = false, reduce_sym = :δ²
-        )
         row_iter_loop = quote
             K = $base_K
             for crep ∈ 0:$(n_col_reps-1)
@@ -985,18 +997,17 @@ end
         end
         push!(row_iter.args, row_iter_loop)
     elseif n_col_reps == 1
-        if XP > 0
-            loadδ_expr = loadδfnmadd_quote(
-                Mk, Nk, col_rem, T, Ystride, Xstride, βstride, βdim,
-                :ptrY, :ptrX, :ptrβ, :ptrμ, true, false, XP, μstride, μdim, μtransposed
+        loadδ_expr = load_δ_expr(config, Mk, Nk, col_rem, μsym, true, maskrowiter)
+        push!(row_iter.args, loadδ_expr)
+        row_iter_single = if maskrowiter
+            StructuredMatrices.A_rdiv_U_kernel_quote(
+                :row_rem_final, Nk, col_rem, T, Astride, Ystride, N, true, true, storeA = false, loadB = false, reduce_sym = :δ²
             )
         else
-            loadδ_expr = loadδ_quote(Mk, Nk, col_rem, T, Ystride, :ptrY, μdim, μstride, μsym, true, true, μtransposed)
+            StructuredMatrices.A_rdiv_U_kernel_quote(
+                Mk, Nk, col_rem, T, Astride, Ystride, N, true, true, storeA = false, loadB = false, reduce_sym = :δ²
+            )
         end
-        push!(row_iter.args, loadδ_expr)
-        row_iter_single = StructuredMatrices.A_rdiv_U_kernel_quote(
-            Mk, Nk, col_rem, T, Mk, Ystride, N, true, true, storeA = false, loadB = false, reduce_sym = :δ²
-        )
         push!(row_iter.args, row_iter_single)
     end
     row_iter
@@ -1016,10 +1027,6 @@ end
     n_col_reps, col_rem = divrem(P, Nk)
     total_col_iterations = n_col_reps + (col_rem > 0)
     size_T = sizeof(T)
-    loopbody = quote
-        Bₚ = L[p]
-        invdiagL[p] = invdiagLlazy[p]
-    end
     preloopquote = if last(DistributionParameters.caches_invdiag(P, LL, T))
         quote invdiagL = invdiag(L) end
     elseif !(calclogdet && track_L)
@@ -1068,7 +1075,7 @@ end
         total_row_iterations = n_row_reps + (row_rem > 0)
         Mk1 = n_row_reps == 0 ? row_rem : Mk
         row_iter = mutlivariate_normal_SMLT_rowiter(
-            Mk1, Nk, col_rem, T, Ystride, n_col_reps, μdim, μstride, :ptrμ, XP, βstride, Xstride, βdim, μtransposed
+            config, Mk1, Nk, col_rem, n_col_reps, :ptrμ, Mk
         )
         if n_row_reps > 1
             row_loops = quote
@@ -1085,19 +1092,19 @@ end
         end
         if row_rem > 0 && n_row_reps > 0
             push!(q.args, :(ptrUdiag = pointer(invdiagL); ptrUtri = ptrUtribase))
-            push!(q.args, mutlivariate_normal_SMLT_rowiter( row_rem, Nk, col_rem, T, Ystride, n_col_reps, μdim, μstride, :ptrμ, XP, βstride, Xstride, βdim, μtransposed ))
+            push!(q.args, mutlivariate_normal_SMLT_rowiter( config, row_rem, Nk, col_rem, n_col_reps, :ptrμ, Mk ))
         end
     else # Unknown number of iterations.
         row_iter = mutlivariate_normal_SMLT_rowiter(
-            Mk, Nk, col_rem, T, Ystride, n_col_reps, μdim, μstride, :ptrμ, XP, βstride, Xstride, βdim, μtransposed
+            config, Mk, Nk, col_rem, n_col_reps, :ptrμ
         )
         Wrem, Mkrem, Nkrem = StructuredMatrices.div_triangle_blocking_structure(W, P, T)
         n_col_repsrem, col_remrem = divrem(P, Nkrem)
         row_iter_onevec = mutlivariate_normal_SMLT_rowiter(
-            W, Nkrem, col_remrem, T, Ystride, n_col_repsrem, μdim, μstride, :ptrμ, XP, βstride, Xstride, βdim, μtransposed
+            config, W, Nkrem, col_remrem, n_col_repsrem, :ptrμ
         )
         row_iter_onevecmask = mutlivariate_normal_SMLT_rowiter(
-            :row_rem_final, Nkrem, col_remrem, T, Ystride, n_col_repsrem, μdim, μstride, :ptrμ, XP, βstride, Xstride, βdim, μtransposed
+            config, -1, Nkrem, col_remrem, n_col_repsrem, :ptrμ, W
         )
         loop_increments_onevec = quote ptrY += $(size_T*W) end 
         XP > 0 && push!(loop_increments_onevec.args, :(ptrX += $(size_T*W)))
@@ -1209,7 +1216,7 @@ for calclogdet ∈ (true,false)
                 elseif Tμ <: AbstractFixedSizeVector
                     config.μstride = 0; config.μdim = 1
                 elseif Tμ <: AbstractFixedSizeMatrix
-                    config.μstrie = (Tμ.parameters[4].parameters[2])::Int; config.μdim = 2
+                    config.μstride = (Tμ.parameters[4].parameters[2])::Int; config.μdim = 2
                 else
                     throw("Type of μ == $A is not recognized.")
                 end
@@ -1420,9 +1427,32 @@ end
         end
     end
 end
+@noinline function store_A_kernel!(q, Mk::Symbol, Nk, init, sym, W, Wshift, T, stride, negative::Bool = true)#, K = :K)
+    mask = 
+    V = Vec{W,T}; size_T = sizeof(T)
+    func = negative ? :vsub : :vadd
+    # symK = Symbol(sym, "#K#")
+    # Kdiff = K isa Symbol ? :($K - $Nk) : K - Nk
+    # push!(q.args, Expr(:(=), symK, :($sym + $size_T * $stride * $Kdiff)))
+    for c ∈ 0:(Nk-1)
+        index = :($sym + $size_T*($c*$stride))
+        nAsym = if init
+            negative ? :(vsub($(Symbol(:A_0_,c)))) : Symbol(:A_0_,c)
+        elseif c == Nk - 1
+            :($func(vload($V, $index, $mask), $(Symbol(:A_0_,c))))
+        else
+            :($func(vload($V, $index), $(Symbol(:A_0_,c))))
+        end
+        if c == Nk-1
+            push!(q.args, :(vstore!($index, $nAsym, __mask__)))
+        else
+            push!(q.args, :(vstore!($index, $nAsym)))
+        end
+    end
+end
 
 @noinline function track_mu_store(
-    Mk,Nk,T,μdim,μmy,W,Wshift,μstride,track_Y,μtransposed,
+    Mk::Int,Nk,T,μdim,μmy,W,Wshift,μstride,track_Y,μtransposed,
     initialize::Bool=false,initμ::Bool=true,initY::Bool=true#,K = :K
 )::Expr
     size_T = sizeof(T)
@@ -1518,6 +1548,68 @@ end
     end
     row_iter
 end
+@noinline function track_mu_store(
+    Mk::Symbol,Nk,T,μdim,μmy,W,Wshift,μstride,track_Y,μtransposed,
+    initialize::Bool=false,initμ::Bool=true,initY::Bool=true#,K = :K
+)::Expr
+    size_T = sizeof(T)
+    V = Vec{W,T}
+    row_iter = quote end
+    f = μmy ? :vsub : :vadd
+    if μdim == 0
+        iter = 0
+        for c ∈ 0:(Nk-1)
+            pm = Symbol(:∂μ_,iter & 3)
+            A_m_c = Symbol(:A_0_,c)
+            push!(row_iter.args, Expr(:(=), pm, :(vifelse(__mask__,$f($pm, $A_m_c),$p_m))))
+            iter += 1
+        end
+    elseif μdim == 1
+        if μtransposed
+            for c ∈ 0:(Nk-1)
+                mc = Symbol(:vμ_,c)
+                push!(row_iter.args, Expr(:(=), mc, :(vload($V, ptrv∂μ + $(c*W*size_T)))))
+            end
+            for c ∈ 0:(Nk-1)
+                mc = Symbol(:vμ_,c)
+                push!(row_iter.args, Expr(:(=), mc, :(vifelse(__mask__,$f($mc, $(Symbol(:A_0_,c))),$mc))))
+            end
+            for c ∈ 0:(Nk-1)
+                mc = Symbol(:vμ_,c)
+                push!(row_iter.args, :(vstore!(ptrv∂μ + $(c*W)*$size_T, $mc)))
+            end
+        else
+            if initialize
+                if initμ
+                    if μmy
+                        push!(row_iter.args, :(v∂μ_0 = vsub(A_0_0)))
+                    else
+                        push!(row_iter.args, :(v∂μ_0 = A_0_0))
+                    end
+                else
+                    func = μmy ? :vsub : :vadd
+                    push!(row_iter.args, :(v∂μ_0 = $func(vload($V, ptr∂μ, A_0_0))))
+                end
+                firstc = 1
+            else
+                push!(row_iter.args, :(v∂μ_0 = vload($V, ptr∂μ )))
+                firstc = 0
+            end
+            for c ∈ firstc:Nk-1
+                push!(row_iter.args, :(v∂μ_0 = $f(v∂μ_0, $(Symbol(:A_0_,c)))))
+            end
+            push!(row_iter.args, :(vstore!(ptr∂μ, v∂μ_0)))
+        end
+    elseif μdim == 2 # if ∂μ is not aliasing A, we need to store.
+        need_to_store = if track_Y && initY # A aliases ∂Y, need to store ∂μ
+            true
+        else# 
+            !initμ
+        end
+        need_to_store && store_A_kernel!(row_iter, Mk, Nk, initμ, :ptr∂μ_rev, W, Wshift, T, μstride, μmy)#, K)
+    end
+    row_iter
+end
 
 function ∂Y_distinct_from_A(config)::Bool
     @unpack track_Y, initY = config
@@ -1579,11 +1671,37 @@ end
     nothing
 end
 
+
+function load_δ_expr(
+    config::NormalCholeskyConfiguration{T}, Mk, Nk, K, μsym, μmy, maskrowiter
+) where {T}
+    @unpack Ystride, Xstride, βstride, βdim, XP, μstride, μdim, μtransposed = config
+    if XP > 0
+        if maskrowiter
+            loadδfnmadd_quote(
+                :row_rem_final, Nk, K, T, Ystride, Xstride, βstride, βdim,
+                :ptrY, :ptrX, :ptrβ, :ptrμ, true, μmy, XP, μstride, μdim, μtransposed
+            )
+        else
+            loadδfnmadd_quote(
+                Mk, Nk, K, T, Ystride, Xstride, βstride, βdim,
+                :ptrY, :ptrX, :ptrβ, :ptrμ, true, μmy, XP, μstride, μdim, μtransposed
+            )
+        end
+    else
+        if maskrowiter
+            loadδ_expr = loadδ_quote(:row_rem_final, Nk, K, T, Ystride, :ptrY, μdim, μstride, μsym, true, μmy, μtransposed)
+        else
+            loadδ_expr = loadδ_quote(Mk, Nk, K, T, Ystride, :ptrY, μdim, μstride, μsym, true, μmy, μtransposed)
+        end
+    end
+end
+
 @noinline function ∂mutlivariate_normal_SMLT_rowiter(
     config::NormalCholeskyConfiguration{T},
     Mk::Int, Nk::Int, col_rem::Int,
     n_col_reps::Int, μmy::Bool, μsym::Symbol = :μptr,
-    Astride::Union{Int,Symbol} = Ystride, rem
+    Astride::Union{Int,Symbol} = Ystride
 ) where {T}
     @unpack track_Y, track_X, track_β, track_μ, track_L, βstride, Xstride, Ystride, μstride, μdim, βdim, XP, μtransposed = config
     @unpack initY, initX, initβ, initμ = config
@@ -1610,25 +1728,7 @@ end
         row_iter = quote end
     end
     if col_rem > 0
-        if XP > 0
-            loadδ_expr = if maskrowiter
-                loadδfnmadd_quote(
-                    :row_rem_final, col_rem, 0, T, Ystride, Xstride, βstride, βdim,
-                    :ptrY, :ptrX, :ptrβ, :ptrμ, true, μmy, XP, μstride, μdim, μtransposed
-                )
-            else
-                loadδfnmadd_quote(
-                    Mk, col_rem, 0, T, Ystride, Xstride, βstride, βdim,
-                    :ptrY, :ptrX, :ptrβ, :ptrμ, true, μmy, XP, μstride, μdim, μtransposed
-                )
-            end
-        else
-            if maskrowiter
-                loadδ_quote(:row_rem_final, col_rem, 0, T, Ystride, :ptrY, μdim, μstride, μsym, true, μmy, μtransposed)
-            else
-                loadδ_quote(Mk, col_rem, 0, T, Ystride, :ptrY, μdim, μstride, μsym, true, μmy, μtransposed)
-            end
-        end
+        loadδ_expr = load_δ_expr(config, Mk, col_rem, 0, μsym, μmy, maskrowiter)
         iter_quote = if maskrowiter
             StructuredMatrices.A_rdiv_U_kernel_quote( :row_rem_final, col_rem, 0, T, Astride, Ystride, N, true, true, storeA = true, loadB = false, reduce_sym = :δ² )
         else
@@ -1645,17 +1745,16 @@ end
         KmZ = true
     end
     if n_col_reps > 1
-        if XP > 0
-            loadδ_expr = loadδfnmadd_quote(
-                Mk, Nk, :K, T, Ystride, Xstride, βstride, βdim,
-                :ptrY, :ptrX, :ptrβ, :ptrμ, true, μmy, XP, μstride, μdim, μtransposed
+        loadδ_expr = load_δ_expr(config, Mk, Nk, :K, μsym, μmy, maskrowiter)
+        iterquote = if maskrowiter
+            StructuredMatrices.A_rdiv_U_kernel_quote(
+                :row_rem_final, Nk, :K, T, Astride, Ystride, N, true, true, storeA = true, loadB = false, reduce_sym = :δ²
             )
         else
-            loadδ_expr = loadδ_quote(Mk, Nk, :K, T, Ystride, :ptrY, μdim, μstride, μsym, true, μmy, μtransposed)
+            StructuredMatrices.A_rdiv_U_kernel_quote(
+                Mk, Nk, :K, T, Astride, Ystride, N, true, true, storeA = true, loadB = false, reduce_sym = :δ²
+            )
         end
-        iterquote = StructuredMatrices.A_rdiv_U_kernel_quote(
-            Mk, Nk, :K, T, Astride, Ystride, N, true, true, storeA = true, loadB = false, reduce_sym = :δ²
-        )
         row_iter_loop = quote
             K = $base_K
             for crep ∈ 0:$(n_col_reps-1)
@@ -1668,18 +1767,17 @@ end
         end
         push!(row_iter.args, row_iter_loop)
     elseif n_col_reps == 1
-        if XP > 0
-            loadδ_expr = loadδfnmadd_quote(
-                Mk, Nk, col_rem, T, Ystride, Xstride, βstride, βdim,
-                :ptrY, :ptrX, :ptrβ, :ptrμ, true, μmy, XP, μstride, μdim, μtransposed
+        loadδ_expr = load_δ_expr(config, Mk, Nk, col_rem, μsym, μmy, maskrowiter)
+        push!(row_iter.args, loadδ_expr)
+        row_iter_single = if maskrowiter
+            StructuredMatrices.A_rdiv_U_kernel_quote(
+                :row_rem_final, Nk, col_rem, T, Astride, Ystride, N, true, true, storeA = true, loadB = false, reduce_sym = :δ² # storeA = col_rem > 0
             )
         else
-            loadδ_expr = loadδ_quote(Mk, Nk, col_rem, T, Ystride, :ptrY, μdim, μstride, μsym, true, μmy, μtransposed)
+            StructuredMatrices.A_rdiv_U_kernel_quote(
+                Mk, Nk, col_rem, T, Astride, Ystride, N, true, true, storeA = true, loadB = false, reduce_sym = :δ² # storeA = col_rem > 0
+            )
         end
-        push!(row_iter.args, loadδ_expr)
-        row_iter_single = StructuredMatrices.A_rdiv_U_kernel_quote(
-            Mk, Nk, col_rem, T, Astride, Ystride, N, true, true, storeA = true, loadB = false, reduce_sym = :δ² # storeA = col_rem > 0
-        )
         push!(row_iter.args, row_iter_single)
     end
     ########################
@@ -1688,16 +1786,29 @@ end
     init_reverse_pointers!(row_iter, config)
     store_Y = ∂Y_distinct_from_A(config)
     if col_rem > 0
-        row_iter_rev = StructuredMatrices.A_rdiv_L_kernel_quote(
-            Mk, col_rem, col_rem, T, Astride, Astride, false, true,
-            Bsym = :ptrA_rev, Asym = :ptrA_rev, Ltrisym = :ptrLtri, Ldiagsym = :ptrLdiag,
-            loadB = true, storeA = true, calc_product = track_L ? N : 0
-        )
+        row_iter_rev = if maskrowiter
+            StructuredMatrices.A_rdiv_L_kernel_quote(
+                :row_rem_final, col_rem, col_rem, T, Astride, Astride, false, true,
+                Bsym = :ptrA_rev, Asym = :ptrA_rev, Ltrisym = :ptrLtri, Ldiagsym = :ptrLdiag,
+                loadB = true, storeA = true, calc_product = track_L ? N : 0
+            )
+        else
+            StructuredMatrices.A_rdiv_L_kernel_quote(
+                Mk, col_rem, col_rem, T, Astride, Astride, false, true,
+                Bsym = :ptrA_rev, Asym = :ptrA_rev, Ltrisym = :ptrLtri, Ldiagsym = :ptrLdiag,
+                loadB = true, storeA = true, calc_product = track_L ? N : 0
+            )
+        end
         fullcols = Nk * n_col_reps
         # handle following in A_rdiv_L_quote
         append!(row_iter.args, row_iter_rev.args)
-        track_μ && push!(row_iter.args, track_mu_store(Mk,col_rem,T,μdim,μmy,W,Wshift,μstride,track_Y,μtransposed,true,initμ,initY))#, col_rem))
-        store_Y && store_A_kernel!(row_iter, Mk, col_rem, initY, :ptr∂Y_rev, W, Wshift, T, Ystride, !μmy)#, col_rem)
+        if maskrowiter
+            track_μ && push!(row_iter.args, track_mu_store(:row_rem_final,col_rem,T,μdim,μmy,W,Wshift,μstride,track_Y,μtransposed,true,initμ,initY))#, col_rem))
+            store_Y && store_A_kernel!(row_iter, :row_rem_final, col_rem, initY, :ptr∂Y_rev, W, Wshift, T, Ystride, !μmy)#, col_rem)
+        else
+            track_μ && push!(row_iter.args, track_mu_store(Mk,col_rem,T,μdim,μmy,W,Wshift,μstride,track_Y,μtransposed,true,initμ,initY))#, col_rem))
+            store_Y && store_A_kernel!(row_iter, Mk, col_rem, initY, :ptr∂Y_rev, W, Wshift, T, Ystride, !μmy)#, col_rem)
+        end
         push!(row_iter.args, loop_pointer_increments(config, Nk, col_rem, col_rem, W, Astride))
         base_K = col_rem
         KmZ = false
@@ -1707,21 +1818,38 @@ end
     end
     loop_ptr_increments = loop_pointer_increments(config, Nk, Nk, :K, W, Astride)
     if n_col_reps > 1
-        iterquote = StructuredMatrices.A_rdiv_L_kernel_quote(
-            Mk, Nk, :K, T, Astride, Astride, false, true,
-            Bsym = :ptrA_rev, Asym = :ptrA_rev, Ltrisym = :ptrLtri, Ldiagsym = :ptrLdiag,
-            loadB = true, storeA = true, calc_product = track_L ? N : 0
-        )
-        if col_rem == 0 && !μtransposed && track_μ # then we need to zero-initialize these rows before entering the loop
-            Riter = Mk >>> Wshift
-            Rrem = Mk & (W-1)
-            Riterl = Rrem > 0 ? Riter : Riter-1
-            for r ∈ 0:Riterl
-                push!(row_iter.args, :(vstore!(ptr∂μ + $(r*W*size_T), vbroadcast($V, zero($T)))))
+        iterquote = if maskrowiter
+            StructuredMatrices.A_rdiv_L_kernel_quote(
+                :row_rem_final, Nk, :K, T, Astride, Astride, false, true,
+                Bsym = :ptrA_rev, Asym = :ptrA_rev, Ltrisym = :ptrLtri, Ldiagsym = :ptrLdiag,
+                loadB = true, storeA = true, calc_product = track_L ? N : 0
+            )
+        else
+            StructuredMatrices.A_rdiv_L_kernel_quote(
+                Mk, Nk, :K, T, Astride, Astride, false, true,
+                Bsym = :ptrA_rev, Asym = :ptrA_rev, Ltrisym = :ptrLtri, Ldiagsym = :ptrLdiag,
+                loadB = true, storeA = true, calc_product = track_L ? N : 0
+            )
+        end
+        if col_rem == 0 && !μtransposed && track_μ && μdim == 1 # then we need to zero-initialize these rows before entering the loop
+            if maskrowiter
+                push!(row_iter.args, :(vstore!(ptr∂μ, vbroadcast($V, zero($T)), __mask__)))
+            else
+                Riter = Mk >>> Wshift
+                Rrem = Mk & (W-1)
+                Riterl = Rrem > 0 ? Riter : Riter-1
+                for r ∈ 0:Riterl
+                    push!(row_iter.args, :(vstore!(ptr∂μ + $(r*W*size_T), vbroadcast($V, zero($T)))))
+                end
             end
         end
-        track_μ && push!(iterquote.args, track_mu_store(Mk,Nk,T,μdim,μmy,W,Wshift,μstride,track_Y,μtransposed,false,initμ,initY))#, :K))
-        store_Y && store_A_kernel!(iterquote, Mk, Nk, initY, :ptr∂Y_rev, W, Wshift, T, Ystride, !μmy)#, :K)
+        if maskrowiter
+            track_μ && push!(iterquote.args, track_mu_store(:row_rem_final,Nk,T,μdim,μmy,W,Wshift,μstride,track_Y,μtransposed,false,initμ,initY))#, :K))
+            store_Y && store_A_kernel!(iterquote, :row_rem_final, Nk, initY, :ptr∂Y_rev, W, Wshift, T, Ystride, !μmy)#, :K)
+        else
+            track_μ && push!(iterquote.args, track_mu_store(Mk,Nk,T,μdim,μmy,W,Wshift,μstride,track_Y,μtransposed,false,initμ,initY))#, :K))
+            store_Y && store_A_kernel!(iterquote, Mk, Nk, initY, :ptr∂Y_rev, W, Wshift, T, Ystride, !μmy)#, :K)
+        end
         row_iter_rev_loop = quote
             K = $col_rem
             for crep ∈ 0:$(n_col_reps-1)
@@ -1733,14 +1861,27 @@ end
         push!(row_iter.args, row_iter_rev_loop)
     elseif n_col_reps == 1
         store_A = track_Xβ || (track_fsμ && initμ) || (track_Y && initY)
-        row_iter_rev_single = StructuredMatrices.A_rdiv_L_kernel_quote(
-            Mk, Nk, N, T, Astride, Astride, false, true,
-            Bsym = :ptrA_rev, Asym = :ptrA_rev, Ltrisym = :ptrLtri, Ldiagsym = :ptrLdiag,
-            loadB = true, storeA = store_A, calc_product = track_L ? N : 0
-        )
+        row_iter_rev_single = if maskrowiter
+            StructuredMatrices.A_rdiv_L_kernel_quote(
+                :row_rem_final, Nk, N, T, Astride, Astride, false, true,
+                Bsym = :ptrA_rev, Asym = :ptrA_rev, Ltrisym = :ptrLtri, Ldiagsym = :ptrLdiag,
+                loadB = true, storeA = store_A, calc_product = track_L ? N : 0
+            )
+        else
+            StructuredMatrices.A_rdiv_L_kernel_quote(
+                Mk, Nk, N, T, Astride, Astride, false, true,
+                Bsym = :ptrA_rev, Asym = :ptrA_rev, Ltrisym = :ptrLtri, Ldiagsym = :ptrLdiag,
+                loadB = true, storeA = store_A, calc_product = track_L ? N : 0
+            )
+        end
         push!(row_iter.args, row_iter_rev_single)
-        track_μ && push!(row_iter.args, track_mu_store(Mk,Nk,T,μdim,μmy,W,Wshift,μstride,track_Y,μtransposed,col_rem == 0,initμ,initY))#, N))
-        store_Y && store_A_kernel!(row_iter, Mk, Nk, initY, :ptr∂Y_rev, W, Wshift, T, Ystride, !μmy)#, N)
+        if maskrowiter
+            track_μ && push!(row_iter.args, track_mu_store(:row_rem_final,Nk,T,μdim,μmy,W,Wshift,μstride,track_Y,μtransposed,col_rem == 0,initμ,initY))#, N))
+            store_Y && store_A_kernel!(row_iter, :row_rem_final, Nk, initY, :ptr∂Y_rev, W, Wshift, T, Ystride, !μmy)#, N)
+        else
+            track_μ && push!(row_iter.args, track_mu_store(Mk,Nk,T,μdim,μmy,W,Wshift,μstride,track_Y,μtransposed,col_rem == 0,initμ,initY))#, N))
+            store_Y && store_A_kernel!(row_iter, Mk, Nk, initY, :ptr∂Y_rev, W, Wshift, T, Ystride, !μmy)#, N)
+        end
     end
     row_iter
 end
