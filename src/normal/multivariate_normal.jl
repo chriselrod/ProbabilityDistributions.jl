@@ -1024,7 +1024,6 @@ end
     V = Vec{W,T}
     Wm1 = W - 1
     n_col_reps, col_rem = divrem(P, Nk)
-    total_col_iterations = n_col_reps + (col_rem > 0)
     size_T = sizeof(T)
     preloopquote = if last(DistributionParameters.caches_invdiag(P, LL, T))
         quote invdiagL = invdiag(L) end
@@ -1057,12 +1056,14 @@ end
         push!(q.args, macroexpand(LoopVectorization, loopq))
     end
     arity >= 4 && push!(q.args, :(ptrX = pointer(X); ptrβ = pointer(β)))
-    Aquote = quote
-        # A = $(sp ? :(PtrMatrix{$Mk,$P,$T,$Mk}(pointer(sptr,$T) + $(VectorizationBase.align(size_T*P)))) : :(FixedSizeMatrix{$Mk,$P,$T,$Mk}(undef)))
-        A = $(sp ? :(PtrMatrix{$Mk,$P,$T,$Mk}(pointer(sptr,$T) + $(VectorizationBase.align(size_T*P)))) : :(PtrMatrix{$Mk,$P,$T,$Mk}(SIMDPirates.alloca(Val{$P}(),$T))))
-        ptrA = pointer(A)
+    if (n_col_reps + (col_rem > 0) > 1)
+        Aquote = quote
+            # A = $(sp ? :(PtrMatrix{$Mk,$P,$T,$Mk}(pointer(sptr,$T) + $(VectorizationBase.align(size_T*P)))) : :(FixedSizeMatrix{$Mk,$P,$T,$Mk}(undef)))
+            A = $(sp ? :(PtrMatrix{$Mk,$P,$T,$Mk}(pointer(sptr,$T) + $(VectorizationBase.align(size_T*P)))) : :(PtrMatrix{$Mk,$P,$T,$Mk}(SIMDPirates.alloca(Val{$(P*Mk)}(),$T))))
+            ptrA = pointer(A)
+        end
+        push!(q.args, Aquote) # more than one col iter, and need to store cumulative results
     end
-    total_col_iterations > 1 && push!(q.args, Aquote)
     if μdim == 0
         push!(q.args, Expr(:(=), :ptrμ, :(vbroadcast($V, μ))))
     elseif μdim > 0
@@ -1629,14 +1630,14 @@ end
 """
 Sets pointers back columns during the reverse pass over rows.
 """
-@noinline function loop_pointer_increments(config::NormalCholeskyConfiguration{T}, Nk, Nk2, K, W, Astride) where {T}
+@noinline function loop_pointer_increments(config::NormalCholeskyConfiguration{T}, Nk, K, W, Astride) where {T}
     @unpack track_μ, track_L, Ystride, μstride, μdim, μtransposed = config
     @unpack initY, initX, initβ, initμ = config
     size_T = sizeof(T)
 
     b2Nk = StructuredMatrices.binomial2(Nk)
     loop_ptr_increments = quote
-        ptrLdiag -= $(size_T*Nk2)
+        ptrLdiag -= $(size_T*Nk)
         ptrLtri -= $size_T*($Nk*$K + $b2Nk)
         ptrA_rev -= $size_T*$Nk*$Astride 
     end
@@ -1809,12 +1810,12 @@ end
             track_μ && push!(row_iter.args, track_mu_store(Mk,col_rem,T,μdim,μmy,W,Wshift,μstride,track_Y,μtransposed,true,initμ,initY))#, col_rem))
             store_Y && store_A_kernel!(row_iter, Mk, col_rem, initY, :ptr∂Y_rev, W, Wshift, T, Ystride, !μmy)#, col_rem)
         end
-        push!(row_iter.args, loop_pointer_increments(config, Nk, col_rem, col_rem, W, Astride))
+        push!(row_iter.args, loop_pointer_increments(config, Nk, col_rem, W, Astride))
         base_K = col_rem
     else
         base_K = 0
     end
-    loop_ptr_increments = loop_pointer_increments(config, Nk, Nk, :K, W, Astride)
+    loop_ptr_increments = loop_pointer_increments(config, Nk, :K, W, Astride)
     if n_col_reps > 1
         iterquote = if maskrowiter
             StructuredMatrices.A_rdiv_L_kernel_quote(
@@ -2343,6 +2344,46 @@ end
     array_allocations, Astride::Union{Int,Symbol}
 end
 
+struct BlockingStructure{T}
+    P::Int
+    W::Int
+    Mk::Int
+    Nk::Int
+    n_col_reps::Int
+    col_rem::Int
+    total_col_iterations::Int
+    startoffset::Int
+end
+function BlockingStructure(maxM, P, ::Type{T}) where {T}
+    W, Mk, Nk = StructuredMatrices.div_ul_blocking_structure(maxM, P, T)
+    n_col_reps, col_rem = divrem(P, Nk)
+    total_col_iterations = n_col_reps + (col_rem > 0)
+    startoffset = (total_col_iterations-1) * Nk
+    BlockingStructure{T}(
+        P, W, Mk, Nk, n_col_reps, col_rem, total_col_iterations, startoffset
+    )
+end
+
+function add_reversepass_base_offsets!(q, blocking_structure::BlockingStructure{T}, config::NormalCholeskyConfiguration{T}, Astride) where {T}
+    size_T = sizeof(T)
+    @unpack P, W, Mk, Nk, n_col_reps, col_rem, total_col_iterations, startoffset = blocking_structure
+    @unpack Ystride, μstride, track_L, track_μ, μdim, μtransposed = config
+    push!(q.args, :( ptrUtribase = pointer(L) + $(P*size_T) ) )
+    push!(q.args, :( _A_offset_ = $size_T*$Astride*$startoffset ) )
+    push!(q.args, :( ptrLtribase = pointer(L) + $size_T * $(P + StructuredMatrices.binomial2(startoffset) + startoffset * (P - startoffset)) ) ) # diag + triangle + subtriangle
+    ∂Y_distinct_from_A(config) && push!(q.args, :(_Y_offset_ = $size_T * $Ystride * $startoffset))
+    ∂μ2d_distinct_from_A(config) && push!(q.args, :(_μ_offset_ = $size_T * $μstride * $startoffset))
+    push!(q.args, :(ptrLdiagbase = pointer(invdiagL) + $(size_T * startoffset)))
+    if track_L
+        push!(q.args, :(ptrv∂Ltribase = pointer(v∂L) + $(W*size_T * (P + StructuredMatrices.binomial2(startoffset) + startoffset * (P - startoffset))))) # diag + triangle + subtriangle
+        push!(q.args, :(ptrv∂Ldiagbase = pointer(v∂L) + $(W*size_T*startoffset)))
+    end
+    if track_μ && μdim == 1 && μtransposed
+        push!(q.args, :(ptrv∂μbase = pointer(v∂μ) + $(size_T*W*startoffset)))
+    end
+    nothing
+end
+
 ## StructuredMatrices.jl Lower Triangular (SMLT) quote
 ## M is the sample size
 @noinline function ∂multivariate_normal_SMLT_quote(
@@ -2351,18 +2392,12 @@ end
     @unpack M, P, track_Y, track_X, track_β, track_μ, track_L, βstride, Xstride, Ystride, μstride, μdim, sp, βdim,  XP, μtransposed, arity, allocate_partials, calclogdet, LL = config
     @unpack initY, initX, initβ, initμ, initL = config
     maxM = M isa Symbol ? typemax(Int) : M
-    W, Mk, Nk = StructuredMatrices.div_ul_blocking_structure(maxM, P, T)
-    # @show W, Mk, Nk, maxM, P
+    blockstructure = BlockingStructure(maxM, P, T)
+    @unpack W, Mk, Nk = blockstructure
     V = Vec{W,T}
     Wm1 = W - 1
     n_col_reps, col_rem = divrem(P, Nk)
-    total_col_iterations = n_col_reps + (col_rem > 0)
-    #Nl = ( N + W - 1 ) & ~Wm1
     size_T = sizeof(T)
-    # need to allocate invdiagL, ∂Y, ∂μ, ∂L, and v∂L
-    # also writing into ptrA
-    # Q: do we increment ptrA alongside Y?
-    # Q: if yes, is ptrA ∂Y or ∂μ ?
     invdiagLL = VectorizationBase.align(P, W)
     row_increments = quote
         ptrY += $(size_T*Mk)
@@ -2394,18 +2429,12 @@ end
         push!(array_allocations.args, :(invdiagL = last(Base.Broadcast.materialize($sptrexpr, invdiag(L)))))
     end
     Mk2 = min(4, M isa Symbol ? cld(Mk,W) : cld(min(Mk,M),W))
-    startoffset = (total_col_iterations-1) * Nk
     q = quote
         $array_allocations
         $(Expr[Expr(:(=), Symbol(:δ²_,m), :(vbroadcast($V, zero($T)))) for m ∈ 0:Mk2-1]...)
         ptrY = pointer(Y)
-        ptrUtribase = pointer(L) + $(P*size_T)
-        _A_offset_ = $size_T*$Astride*$startoffset
-        ptrLtribase = pointer(L) + $size_T * $(P + StructuredMatrices.binomial2(startoffset) + startoffset * (P - startoffset)) # diag + triangle + subtriangle
     end
     local q::Expr
-    ∂Y_distinct_from_A(config) && push!(q.args, :(_Y_offset_ = $size_T * $Ystride * $startoffset))
-    ∂μ2d_distinct_from_A(config) && push!(q.args, :(_μ_offset_ = $size_T * $μstride * $startoffset))
     if track_L && calclogdet
         loopprequote = quote logdiag_L = logdiag(L) end
         loopbody = quote δ²_0 = LoopVectorization.vadd(δ²_0, logdiag_L[p]) end
@@ -2425,7 +2454,6 @@ end
         # println(loopexpr)
         push!(q.args, macroexpand(LoopVectorization, loopexpr))
     end
-    push!(q.args, :(ptrLdiagbase = pointer(invdiagL) + $(size_T * startoffset)))
     # Workaround for Vec alignment issue
     # If M isa Symbol, the inline will be added by the func calling this one.
     M isa Integer && pushfirst!(q.args, Expr(:meta, :inline))
@@ -2438,8 +2466,6 @@ end
             end
         end
         push!(q.args, set_v∂L_to_zero_quote)
-        push!(q.args, :(ptrv∂Ltribase = pointer(v∂L) + $(W*size_T * (P + StructuredMatrices.binomial2(startoffset) + startoffset * (P - startoffset))))) # diag + triangle + subtriangle
-        push!(q.args, :(ptrv∂Ldiagbase = pointer(v∂L) + $(W*size_T*startoffset)))
     end
     arity >= 4 && push!(q.args, :(ptrX = pointer(X); ptrβ = pointer(β)))
     if track_μ
@@ -2449,7 +2475,6 @@ end
             end
         else
             if μdim == 1 && μtransposed
-                push!(q.args, :(ptrv∂μbase = pointer(v∂μ) + $(size_T*W*startoffset)))
                 set_ptr_vmu_zero_expr = quote
                     ptrv∂μ = pointer(v∂μ)
                     for p ∈ 0:$(P-1)
@@ -2464,7 +2489,7 @@ end
         push!(q.args, Expr(:(=), :ptrμ, μtransposed ? :(pointer(μ.parent)) : :(pointer(μ))))
     end
     μmy = track_Y && !(!initY && μdim == 2 && track_μ)
-    track = (track_Y, track_X, track_β, track_μ, track_L)
+    add_reversepass_base_offsets!(q, blockstructure, config, Astride)
     if M isa Integer
         n_row_reps, row_rem = divrem(M, Mk)
         Mk1 = n_row_reps == 0 ? row_rem : Mk
@@ -2486,31 +2511,42 @@ end
         end
         if row_rem > 0 && n_row_reps > 0
             push!(q.args, :(ptrUdiag = pointer(invdiagL); ptrUtri = ptrUtribase))
-            push!(q.args,
-                  ∂mutlivariate_normal_SMLT_rowiter(
-                      config, row_rem, Nk, col_rem, n_col_reps, μmy, :ptrμ, Astride
-                  )
-            )
+            onevecblock = BlockingStructure(row_rem, P, T) # a different blocking structure may be optimal for the remainder.
+            if onevecblock.startoffset == blockstructure.startoffset
+                Nkrem, col_remrem, n_col_repsrem = Nk, col_rem, n_col_reps
+            else
+                add_reversepass_base_offsets!(q, onevecblock, config, Astride)
+                Nkrem = onevecblock.Nk; col_remrem = onevecblock.col_rem; n_col_repsrem = onevecblock.n_col_reps
+            end
+            push!(q.args, ∂mutlivariate_normal_SMLT_rowiter(
+                config, row_rem, Nkrem, col_remrem, n_col_repsrem, μmy, :ptrμ, Astride
+            ))
         end
     else # Unknown number of iterations.
         row_iter = ∂mutlivariate_normal_SMLT_rowiter(
             config, Mk, Nk, col_rem, n_col_reps, μmy, :ptrμ, Astride
         )
-        Wrem, Mkrem, Nkrem = StructuredMatrices.div_triangle_blocking_structure(W, P, T)
-        n_col_repsrem, col_remrem = divrem(P, Nkrem)
-        row_iter_onevec = ∂mutlivariate_normal_SMLT_rowiter(
-            config, W, Nkrem, col_remrem, n_col_repsrem, μmy, :ptrμ, Astride
-        )
-        row_iter_onevecmask = ∂mutlivariate_normal_SMLT_rowiter(
-            config, -1, Nkrem, col_remrem, n_col_repsrem, μmy, :ptrμ, Astride
-        )
-        row_loops = quote
+        row_loops_primary = quote
             Mkrep, Mkrem = divrem($M, $Mk)
             for rrep ∈ 1:Mkrep
                 ptrUdiag = pointer(invdiagL); ptrUtri = ptrUtribase
                 $row_iter
                 $row_increments
             end
+        end
+        push!(q.args, row_loops_primary)
+        onevecblock = BlockingStructure(W, P, T)
+        Nkrem = onevecblock.Nk; col_remrem = onevecblock.col_rem; n_col_repsrem = onevecblock.n_col_reps
+        row_iter_onevec = ∂mutlivariate_normal_SMLT_rowiter(
+            config, W, Nkrem, col_remrem, n_col_repsrem, μmy, :ptrμ, Astride
+        )
+        row_iter_onevecmask = ∂mutlivariate_normal_SMLT_rowiter(
+            config, -1, Nkrem, col_remrem, n_col_repsrem, μmy, :ptrμ, Astride
+        )
+        if blockstructure.startoffset != onevecblock.startoffset
+            add_reversepass_base_offsets!(q, onevecblock, config, Astride)
+        end
+        row_loops_remainder = quote
             for rrep ∈ 1:Mkrem >>> $(VectorizationBase.intlog2(W))
                 ptrUdiag = pointer(invdiagL); ptrUtri = ptrUtribase
                 $row_iter_onevec
@@ -2523,7 +2559,7 @@ end
                 $row_iter_onevecmask
             end
         end
-        push!(q.args, row_loops)
+        push!(q.args, row_loops_remainder)
     end
     # Reduce the Mk δ² into a single vector.
     R = Mk2
