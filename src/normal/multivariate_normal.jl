@@ -1025,7 +1025,8 @@ end
     Wm1 = W - 1
     n_col_reps, col_rem = divrem(P, Nk)
     size_T = sizeof(T)
-    preloopquote = if first(DistributionParameters.caches_invdiag(P, LL, T))
+    caches_invdiag = first(DistributionParameters.caches_invdiag(P, LL, T))
+    preloopquote = if caches_invdiag
         quote invdiagL = invdiag(L) end
     elseif !(calclogdet && track_L)
         # alloc_invdiagL = sp ? :(PtrVector{$P,$T,$P,true}(pointer(sptr,$T))) : :(FixedSizeVector{$P,$T,$P}(undef))
@@ -1043,13 +1044,16 @@ end
         $preloopquote
     end
     if (track_L && calclogdet) # we'll calculate invdiagL and the logdet in a single loop
-        # alloc_invdiagL = sp ? :(PtrVector{$P,$T,$P,true}(pointer(sptr,$T))) : :(FixedSizeVector{$P,$T,$P}(undef))
-        alloc_invdiagL = sp ? :(PtrVector{$P,$T,$P,true}(pointer(sptr,$T))) : :(PtrVector{$P,$T,$P}(SIMDPirates.alloca(Val{$P}(),$T)))
-        push!(q.args, :(logdiagL = logdiag(L); invdiagL = $alloc_invdiagL))
+        loopbody = quote δ²_0 = LoopVectorization.vadd(δ²_0, logdiagL[p]) end
+        if !caches_invdiag
+            alloc_invdiagL = sp ? :(PtrVector{$P,$T,$P,true}(pointer(sptr,$T))) : :(PtrVector{$P,$T,$P}(SIMDPirates.alloca(Val{$P}(),$T)))
+            push!(q.args, :(invdiagL = $alloc_invdiagL))
+            push!(loopbody.args, :(invdiagL[p] = invdiagLlazy[p]))
+        end
+        push!(q.args, :(logdiagL = logdiag(L)))
         loopq = quote
             @vvectorize $T for p ∈ 1:$P
-                invdiagL[p] = invdiagLlazy[p]
-                δ²_0 = LoopVectorization.vadd(δ²_0, logdiagL[p])
+                $loopbody
             end
             δ²_0 = vmul(δ²_0, vbroadcast($V,$(M isa Integer ? T(2M) : :($(T(2))*$T($M)))))
         end
@@ -1250,8 +1254,8 @@ for calclogdet ∈ (true,false)
                 config = NormalCholeskyConfiguration{T}()
                 config.arity = 5
                 config.βstride = length(Pβ.parameters) == 1 ? K_ : (Pβ.parameters[2])::Int
-                track_Y, track_X, track_β, track_μ, track_L = track
-                @pack! config = M, P, track_Y, track_X, track_β, track_μ, track_L, βstride, LL
+                track_Y, track_X, track_β, track_μ, track_L = $track
+                @pack! config = M, P, track_Y, track_X, track_β, track_μ, track_L, LL
                 config.sp = $sp; config.Ystride = PY; config.Xstride = PX; config.βdim = Nβ; config.XP = K_; config.calclogdet = $calclogdet
                 if Tμ === T
                     config.μdim = 0; config.μstride = 0
