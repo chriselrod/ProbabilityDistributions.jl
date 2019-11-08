@@ -2,7 +2,8 @@
 
 const DISTRIBUTION_DIFF_RULES = Set{Symbol}()
 
-using ReverseDiffExpressionsBase: adj
+using ReverseDiffExpressionsBase: adj, InitializedVarTracker
+
 """
 Do we inline the expression, or try and take advantage of multiple dispatch?
 The latter option sounds more appealing flexible, and easier to test.
@@ -16,7 +17,7 @@ y ~ normal(μ, inv(chol(Σ)))
 This may be handled under the hood via how we represent Σ.
 
 """
-function distribution_diff_rule!(mod, first_pass, second_pass, tracked_vars, out, A, f, verbose = false)
+@noinline function distribution_diff_rule!(ivt::InitializedVarTracker, first_pass::Vector{Any}, tracked_vars, mod, out, A, f, verbose = false)
     track_out = false
     # verbose = true
     function_call = Expr(:call, :($mod.ProbabilityDistributions.$(Symbol(:∂, f, :!))))
@@ -27,21 +28,25 @@ function distribution_diff_rule!(mod, first_pass, second_pass, tracked_vars, out
         end
         track_out = true
         # push!(function_call.args, adj(out, a))
-        push!(function_call.args, adj(a)) # ∂target/∂a
+        push!(function_call.args, uninitialize_update!(first_pass, initialized_seeds, adj(a), mod, aliases)) # ∂target/∂a
     end
-    append!(function_call.args, A)
+    for a ∈ A
+        if a ∈ tracked_vars && ReverseDiffExpressionsBase.initialize!(ivt, first_pass, a, a, mod) # must_initialize
+            push!(function_call.args, :($mod.uninitialized($a)))
+        else
+            push!(function_call.args, a)
+        end
+    end
     if track_out
-        # push!(tracked_vars, out)
         if verbose
             printstring = "distribution $f (ret: $out): "
-            push!(first_pass.args, :(println($printstring)))
+            push!(first_pass, :(println($printstring)))
         end
-        # push!(first_pass.args, :($function_output = $(mod).ProbabilityDistributions.$(Symbol(:∂, f))($(A...), Val{$track_tup}())))
-        push!(first_pass.args, Expr(:(=), out, function_call))
+        push!(first_pass, Expr(:(=), out, function_call))
         if verbose
-            push!(first_pass.args, :(@show $out))
+            push!(first_pass, :(@show $out))
             for a ∈ A
-                a ∈ tracked_vars && push!(first_pass.args, :(@show $(adj(a))))
+                a ∈ tracked_vars && push!(first_pass, :(@show $(adj(a))))
             end
         end
     end
@@ -438,7 +443,7 @@ push!(DISTRIBUTION_DIFF_RULES, :Bernoulli_logit)
             target = vbroadcast(SVec{$W,$T}, zero($T))
             logd = logdiag(L)
             @vvectorize $T for n ∈ 1:$(rem1 ? N-1 : N)
-                target = vfmadd( ($(N - 3) - n + 2η), logd[$(rem1 ? :(n+1) : :n)], target)
+                target = vfmadd( ($(N - 2 - rem1) - n + 2η), logd[$(rem1 ? :(n+1) : :n)], target)
             end
             vtarget = extract_data(target)
         end
@@ -1146,7 +1151,7 @@ function beta_alloc_quote(M, T, (yisvec, αisvec, βisvec), (track_y, tack_α, t
         push!(q.args, :(∂β = nothing))
     end
     push!(q.args, :(target = ∂Beta!(uninitialized(∂y), uninitialized(∂α), uninitialized(∂β), y, α, β)))
-    push!(q.args, return_expression(return_expr))
+    push!(q.args, return_expression(return_expr, sp))
     q
 end
 
@@ -1269,7 +1274,7 @@ function lsgg_quote(
                     $q
                     target = LoopVectorization.SIMDPirates.vadd(SIMDPirates.vsub(asmy, eptsmyd), target)
                 end
-                $(sp ? :(sp, target) : :target)
+                target
             end
         else
             @assert !any((αisvec, ϕisvec, δisvec, σisvec))
@@ -1278,7 +1283,7 @@ function lsgg_quote(
                     $q
                     target = asmy - eptsmyd
                 end
-                $(sp ? :(sp, target) : :target)
+                target
             end
         end
     end

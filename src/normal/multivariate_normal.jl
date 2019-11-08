@@ -120,7 +120,7 @@ end
     end
     δ = DynamicPtrMatrix(pointer(sp, T), (R, cols), R)# (KT+Wm1) & ~Wm1)
     # return sp, to reuse memory
-    sp, Normal!(δ, Y, μ, Σ, Val{track}())
+    Normal!(Val{track}(), δ, Y, μ, Σ)
 end
 @inline function Normal(
     sp::StackPointer,
@@ -129,7 +129,7 @@ end
     μ::PaddedMatrices.AbstractFixedSizeVector{R,T},
     Σ::AbstractFixedSizeCovarianceMatrix{R,T}
 ) where {R,T,track}
-    Normal(sp, (Y,), (μ,), Σ, Val{track}())
+    Normal(sp, Val{track}(), (Y,), (μ,), Σ)
 end
 
     
@@ -1037,7 +1037,7 @@ end
     end
     Mk2 = min(4, M isa Symbol ? cld(Mk,W) : cld(min(Mk,M),W) )
     q = quote
-        $(Expr(:meta,:inline)) # because of allignment bug
+        # $(Expr(:meta,:inline)) # because of allignment bug
         $([Expr(:(=), Symbol(:δ²_,m), :(vbroadcast($V, zero($T)))) for m ∈ 0:Mk2-1]...)
         ptrY = pointer(Y)
         ptrUtribase = pointer(L) + $(P*size_T)
@@ -1150,7 +1150,8 @@ end
         R = Rh
     end
     push!(q.args, Expr(:(=), :δ²_0, :(vmul(vbroadcast($V, $(T(-0.5))), δ²_0))))
-    sp ? push!(q.args, :((sptr,δ²_0))) : push!(q.args, :δ²_0)
+    # sp ? push!(q.args, :((sptr,δ²_0))) : push!(q.args, :δ²_0)
+    push!(q.args, :δ²_0)
     simplify_expr(q)
     # q
 end
@@ -2460,7 +2461,7 @@ end
     end
     # Workaround for Vec alignment issue
     # If M isa Symbol, the inline will be added by the func calling this one.
-    M isa Integer && pushfirst!(q.args, Expr(:meta, :inline))
+    # M isa Integer && pushfirst!(q.args, Expr(:meta, :inline))
     if track_L
         calclogdet && push!(q.args, :(δ²_0 = vmul(δ²_0, vbroadcast($V,$(M isa Integer ? T(2M) : :($(T(2))*$T($M)))))))
         set_v∂L_to_zero_quote = quote
@@ -2680,20 +2681,17 @@ end
             end
         end
     end
-    if sp
-        if config.allocate_partials
+    if config.allocate_partials
+        if sp
             push!(q.args, :(PaddedMatrices.StackPointer(_sptr),$return_expr))
         else
-            push!(q.args, :((sp, δ²_0)))
+            push!(q.args, return_expr)
         end
     else
-        if config.allocate_partials
-            push!(q.args, return_expr)
-        else
-            push!(q.args, :δ²_0)
-        end
+        push!(q.args, :δ²_0)
     end
-    simplify_expr(q)
+
+simplify_expr(q)
 end
 
 function modify_args_∂!(args, allocate_partials, calclogdet)
@@ -2822,7 +2820,7 @@ for calclogdet ∈ (true, false)
                 M, PY = gensym(:M), gensym(:PY)
                 config.Ystride = PY
                 quote
-                    $(Expr(:meta,:inline))
+                    # $(Expr(:meta,:inline))
                     $M = size(Y,1)
                     $PY = $(Y <: Array ? M : :(stride(Y,2)))
                     $(∂multivariate_normal_SMLT_quote(config))
@@ -2859,7 +2857,7 @@ for calclogdet ∈ (true, false)
                     throw("Type of μ = $(Tμ) was not recognized.")
                 end
                 quote
-                    $(Expr(:meta,:inline))
+                    # $(Expr(:meta,:inline))
                     $defs_quote
                     $(∂multivariate_normal_SMLT_quote(config))
                 end
@@ -2877,7 +2875,7 @@ for calclogdet ∈ (true, false)
                 config.βstride = length(Pβ.parameters) == 1 ? K_ : (Pβ.parameters[2])::Int
                 config.Ystride = PY; config.Xstride = PX; config.βdim = Nβ; config.XP = K_; config.sp = $sp
                 quote
-                    $(Expr(:meta,:inline))
+                    # $(Expr(:meta,:inline))
                     $M = size(Y,1)
                     $PY = $(Y <: Array ? M : :(stride(Y,2)))
                     $PX = $(X <: Array ? M : :(stride(X,2)))
@@ -2918,7 +2916,7 @@ for calclogdet ∈ (true, false)
                     throw("Type of μ = $(Tμ) was not recognized.")
                 end
                 quote
-                    $(Expr(:meta,:inline))
+                    # $(Expr(:meta,:inline))
                     $defs_quote
                     $(∂multivariate_normal_SMLT_quote(config))
                 end

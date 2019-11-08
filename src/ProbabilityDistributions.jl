@@ -30,11 +30,13 @@ include("normal/univariate_normal.jl")
 include("normal/multivariate_normal.jl")
 # include("normal/matrix_normal.jl")
 
-# const STACK_POINTER_SUPPORTED_METHODS = Set{Symbol}()
-@def_stackpointer_fallback ∂lsgg ∂Gamma ∂LKJ Normal ∂Normal Normal_fmadd ∂Normal_fmadd ∂Beta ∂Bernoulli_logit ∂Binomial_logit #∂EₘₐₓNMA
+const STACK_POINTER_SUPPORTED_METHODS = Set{Symbol}()
+@def_stackpointer_fallback ∂lsgg ∂Gamma ∂LKJ ∂Normal ∂Beta ∂Bernoulli_logit ∂Binomial_logit #∂EₘₐₓNMA
+@def_stackpointer_noalloc Normal ∂Normal!
 
 function __init__()
-    @add_stackpointer_method ∂lsgg ∂Gamma ∂LKJ Normal ∂Normal Normal_fmadd ∂Normal_fmadd ∂Beta ∂Bernoulli_logit ∂Binomial_logit ∂EₘₐₓNMA
+    @add_stackpointer_method ∂lsgg ∂Gamma ∂LKJ ∂Normal ∂Beta ∂Bernoulli_logit ∂Binomial_logit ∂EₘₐₓNMA
+    @add_stackpointer_noalloc Normal ∂Normal!
 end
 
 end # module
