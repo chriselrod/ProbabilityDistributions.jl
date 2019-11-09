@@ -2200,7 +2200,7 @@ end
     if M isa Integer
         Astride = VectorizationBase.align(M, W)
         Aquote = quote end
-        if sp && Astride * P > 100_000 # If the matrix has more than 200_000 elements, we'll use the StackPointer.
+        if sp #&& Astride * P > 100_000 # If the matrix has more than 100_000 elements, we'll use the StackPointer.
             push!(Aquote.args, :(A = PtrMatrix{$M,$P,$T,$Astride}(_sptr)))
             push!(Aquote.args, :(_sptr += $size_T*$(Astride*P)))
         else
@@ -2218,7 +2218,7 @@ end
     end
     Aquote, Astride::Union{Symbol,Int}
 end
-@noinline function sym_aliases_A!(row_increments, row_increments_rem, sym, size_T, M, Mk, P, W, sp)
+@noinline function sym_aliases_A!(row_increments, row_increments_rem, sym, size_T, M, Mk, P, W, sp) # TODO: use stride of aliasing symbol
     push!(row_increments.args, :(ptrA += $(size_T*Mk)))
     push!(row_increments_rem.args, :(ptrA += $(size_T*W)))
     if M isa Integer
