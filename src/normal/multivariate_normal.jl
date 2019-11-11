@@ -526,7 +526,7 @@ end
     Bstride::Symbol, Bsym::Symbol,
     μdim::Int, μstride::Union{Int,Symbol},
     μsym::Union{Symbol,Nothing} = :μptr, maskload::Bool = true,
-    μmy::Bool = true, μtransposed::Bool = false, masksym = :__mask__
+    μmy::Bool = true, μtransposed::Bool = false, masksym::Union{Unsigned,Symbol} = :__mask__
 )
     size_T = sizeof(T)
     W, Wshift = VectorizationBase.pick_vector_width_shift(T)
@@ -746,7 +746,7 @@ end
     R::Symbol, C::Int, K::Union{Symbol,Int}, T::DataType, Ystride::Symbol, Xstride::Symbol, βstride::Int, βdim::Int,
     ysym::Symbol = :ptrY, xsym::Symbol = :ptrX, βsym::Symbol = :ptrβ, μsym::Symbol = :ptrμ,
     maskload::Bool = true, μmy::Bool = true, XP::Int = -1,
-    μstride::Union{Int,Symbol} = -1, μdim::Int = -1, μtransposed::Bool = false, masksym = :__mask__
+    μstride::Union{Int,Symbol} = -1, μdim::Int = -1, μtransposed::Bool = false, masksym::Union{Unsigned,Symbol} = :__mask__
 )
     size_T = sizeof(T)
     W, Wshift = VectorizationBase.pick_vector_width_shift(T)
@@ -905,7 +905,7 @@ end
 # The symbol version assumes R < W (the SIMD width)
 @noinline function Xβ_load_quote(
     R::Symbol, T::DataType, Xstride::Symbol, βstride::Int, μmy::Bool = true, XP::Int = -1, 
-    xsym::Symbol = :ptrX, βsym::Symbol = :ptrβ, maskload::Bool = true, masksym = :__mask__
+    xsym::Symbol = :ptrX, βsym::Symbol = :ptrβ, maskload::Bool = true, masksym::Union{Unsigned,Symbol} = :__mask__
 )
     size_T = sizeof(T)
     W, Wshift = VectorizationBase.pick_vector_width_shift(T)
@@ -2414,14 +2414,14 @@ end
         push!(row_increments.args, :(ptrX += $(size_T*Mk)))
         push!(row_increments_rem.args, :(ptrX += $(size_T*W)))
     end
-    return_expr = Expr(:tuple,:δ²_0)
-    track_Y && push!(return_expr.args, :(A'))
-    track_X && push!(return_expr.args, :(∂X'))
-    track_β && push!(return_expr.args, βdim == 1 ? :(∂βv') : :(∂β'))
-    track_μ && push!(return_expr.args, (!track_Y && (μdim == 2)) ? :(A') : :(∂μ'))
-    track_L && push!(return_expr.args, :∂L)
     # this increments _sptr
     if allocate_partials
+        return_expr = Expr(:tuple,:δ²_0)
+        track_Y && push!(return_expr.args, :(A'))
+        track_X && push!(return_expr.args, :(∂X'))
+        track_β && push!(return_expr.args, βdim == 1 ? :(∂βv') : :(∂β'))
+        track_μ && push!(return_expr.args, (!track_Y && (μdim == 2)) ? :(A') : :(∂μ'))
+        track_L && push!(return_expr.args, :∂L)
         array_allocations, Astride = allocate_partials_quote!(row_increments, row_increments_rem, config, W, Mk, Nk, invdiagLL)
     else
         array_allocations, Astride = allocate_temporaries_quote!(row_increments, row_increments_rem, config, W, Mk, Nk, invdiagLL)
@@ -2681,7 +2681,7 @@ end
             end
         end
     end
-    if config.allocate_partials
+    if allocate_partials
         if sp
             push!(q.args, :(PaddedMatrices.StackPointer(_sptr),$return_expr))
         else
@@ -2690,8 +2690,7 @@ end
     else
         push!(q.args, :δ²_0)
     end
-
-simplify_expr(q)
+    simplify_expr(q)
 end
 
 function modify_args_∂!(args, allocate_partials, calclogdet)
@@ -2899,7 +2898,7 @@ for calclogdet ∈ (true, false)
                 end
                 $setup
                 config.sp = $sp; config.Ystride = PY; config.Xstride = PX; config.βdim = Nβ; config.XP = K_
-                config.βstride = length(Pβv) == 1 ? K_ : (Pβv[2])::Int
+                config.βstride = Nβ == 1 ? K_ : (Pβv[2])::Int
                 if Tμ === T
                     config.μdim = 0; config.μstride = 0
                 elseif Tμ <: LinearAlgebra.Adjoint{T,<:AbstractMutableFixedSizeVector}

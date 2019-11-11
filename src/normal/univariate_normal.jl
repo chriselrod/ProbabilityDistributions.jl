@@ -315,7 +315,7 @@ for yisvec ∈ (true,false)
                 univariate_normal_quote(
                     $M, T, $yisvec, $μisvec, $σisvec,
                     (∂YN !== Nothing, $∂track_μ, ∂ΣN !== Nothing),
-                    (!isinitialized(y), $initμ, !isinitialized(σ)),
+                    (!isinitialized(∂y), $initμ, !isinitialized(∂σ)),
                     true, $calclogdet
                 )
             end

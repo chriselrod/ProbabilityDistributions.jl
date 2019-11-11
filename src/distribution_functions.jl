@@ -2,7 +2,7 @@
 
 const DISTRIBUTION_DIFF_RULES = Set{Symbol}()
 
-using ReverseDiffExpressionsBase: adj, InitializedVarTracker
+using ReverseDiffExpressionsBase: adj, InitializedVarTracker, initialize!
 
 """
 Do we inline the expression, or try and take advantage of multiple dispatch?
@@ -19,24 +19,21 @@ This may be handled under the hood via how we represent Σ.
 """
 @noinline function distribution_diff_rule!(ivt::InitializedVarTracker, first_pass::Vector{Any}, tracked_vars, mod, out, A, f, verbose = false)
     track_out = false
-    # verbose = true
     function_call = Expr(:call, :($mod.ProbabilityDistributions.$(Symbol(:∂, f, :!))))
     for a ∈ A
-        if a ∉ tracked_vars
-            push!(function_call.args, nothing)
-            continue
-        end
-        track_out = true
-        # push!(function_call.args, adj(out, a))
-        push!(function_call.args, uninitialize_update!(first_pass, initialized_seeds, adj(a), mod, aliases)) # ∂target/∂a
-    end
-    for a ∈ A
-        if a ∈ tracked_vars && ReverseDiffExpressionsBase.initialize!(ivt, first_pass, a, a, mod) # must_initialize
-            push!(function_call.args, :($mod.uninitialized($a)))
+        if a ∈ tracked_vars
+            track_out = true
+            adja = adj(a)
+            if initialize!(ivt, first_pass, adja, adja, mod) # must_initialize
+                push!(function_call.args, :($mod.uninitialized($adja)))
+            else
+                push!(function_call.args, adja)
+            end
         else
-            push!(function_call.args, a)
+            push!(function_call.args, nothing)
         end
     end
+    append!(function_call.args, A)
     if track_out
         if verbose
             printstring = "distribution $f (ret: $out): "
@@ -484,15 +481,10 @@ end
     :(LKJ(L,η,Val{$((!track[1],!track[2]))}()) - $(0.5*log(π)*StructuredMatrices.binomial2(N)))
 end
 @generated function ∂LKJ!(
-    ∂L::PL, ∂η::Pη,
-    L::AbstractCorrCholesky{N,T}, η::T
-) where {N,T,PL,Pη}
-    track_L = PL !== Nothing
+    ∂L::Nothing, ∂η::Pη,
+    L::AbstractCorrCholesky{N,T,M}, η::T
+) where {N,T,PL,Pη,M}
     track_η = Pη !== Nothing
-    if track_L
-        L_uninit = !isinitialized(PL)
-        ∂Lop = L_uninit ? :(=) : :(+=)
-    end
     if track_η
         η_uninit = !isinitialized(Pη)
         ∂ηop = η_uninit ? :(=) : :(+=)
@@ -510,37 +502,7 @@ end
             vadd(extract_data(target), Base.setindex(vbroadcast(Vec{$W,$T},zero($T)), startget, 1))
         end
     end
-    if track_L && track_η
-        q = quote
-            $(Expr(:meta,:inline))
-            target = vbroadcast(SVec{$W,$T}, zero($T))
-            logd = logdiag(L)
-            ∂ηs = zero($T)
-            @vvectorize $T for n ∈ 1:$(N-1)
-                ∂ηₙ = logd[n+1]
-                coef = ($(N - 3) - n + 2η)
-                target = vfmadd( coef, ∂ηₙ, target )
-                $(Expr(∂Lop, :(∂L[n+1]), :(coef / L[n+1])))
-                ∂ηs += $(T(2))*∂ηₙ
-            end
-            $∂η_q
-        end
-        L_uninit && pushfirst!(q.args, :(@inbounds ∂L[1] = zero($T)))
-    elseif track_L
-        q = quote
-            $(Expr(:meta,:inline))
-            target = vbroadcast(SVec{$W,$T}, zero($T))
-            logd = logdiag(L)
-            @vvectorize $T for n ∈ 1:$(N-1)
-                ∂ηₙ = logd[n+1]
-                coef = ($(N - 3) - n + 2η)
-                target = vfmadd(coef, ∂ηₙ, target)
-                $(Expr(∂Lop, :(∂L[n+1]), :(coef / L[n+1])))
-            end
-            extract_data(target)
-        end
-        L_uninit && pushfirst!(q.args, :(@inbounds ∂L[1] = zero($T)))
-    elseif track_η
+    if track_η
         q = quote
             $(Expr(:meta,:inline))
             target = vbroadcast(SVec{$W,$T}, zero($T))
@@ -556,6 +518,72 @@ end
         end
     else
         return zero(T)
+    end
+    simplify_expr(q)
+end
+@generated function ∂LKJ!(
+    ∂L::PL, ∂η::Pη,
+    L::AbstractCorrCholesky{N,T}, η::T
+) where {N,T,Pη,M,PL <: StructuredMatrices.AbstractLowerTriangularMatrix{N,T,M}}
+    track_η = Pη !== Nothing
+    L_uninit = !isinitialized(PL)
+    ∂Lop = L_uninit ? :(=) : :(+=)
+    zeroq = quote
+        @vvectorize $T for n ∈ 1:$(M-N)
+            ∂L[n+$N] = zero($T)
+        end
+    end
+    if track_η
+        η_uninit = !isinitialized(Pη)
+        ∂ηop = η_uninit ? :(=) : :(+=)
+    end
+    W = VectorizationBase.pick_vector_width(N-1,T)
+    if track_η
+        ∂η_q = quote
+            starget = zero($T)
+            for n ∈ 1:$(N-1)
+                c = η + 0.5*($(N-1) - n) # ∂c/∂η = 1
+                starget -= first(logabsgamma(c))
+                ∂ηs -= digamma(c) # ∂target/∂η = ∂target/∂c * ∂c/∂η = -digamma(c) * 1
+            end
+            $(Expr(∂ηop, :(∂η[]), ∂ηs))
+            vadd(extract_data(target), Base.setindex(vbroadcast(Vec{$W,$T},zero($T)), startget, 1))
+        end
+        q = quote
+            target = vbroadcast(SVec{$W,$T}, zero($T))
+            logd = logdiag(L)
+            ∂ηs = zero($T)
+            @vvectorize $T for n ∈ 1:$(N-1)
+                ∂ηₙ = logd[n+1]
+                coef = ($(N - 3) - n + 2η)
+                target = vfmadd( coef, ∂ηₙ, target )
+                $(Expr(∂Lop, :(∂L[n+1]), :(coef / L[n+1])))
+                ∂ηs += $(T(2))*∂ηₙ
+            end
+            $∂η_q
+        end
+        if L_uninit
+            pushfirst!(q.args, zeroq)
+            pushfirst!(q.args, :(@inbounds ∂L[1] = zero($T)))
+        end
+        pushfirst!(q.args, Expr(:meta,:inline))
+    else
+        q = quote
+            target = vbroadcast(SVec{$W,$T}, zero($T))
+            logd = logdiag(L)
+            @vvectorize $T for n ∈ 1:$(N-1)
+                ∂ηₙ = logd[n+1]
+                coef = ($(N - 3) - n + 2η)
+                target = vfmadd(coef, ∂ηₙ, target)
+                $(Expr(∂Lop, :(∂L[n+1]), :(coef / L[n+1])))
+            end
+        end
+        if L_uninit # need to zero skipped elements
+            pushfirst!(q.args, :(@inbounds ∂L[1] = zero($T)))
+            push!(q.args, zeroq)
+        end
+        pushfirst!(q.args, Expr(:meta,:inline))
+        push!(q.args, :(extract_data(target)))
     end
     simplify_expr(q)
 end
