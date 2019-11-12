@@ -235,14 +235,14 @@ end
 end
 
 @inline Normal(y::T) where {T <: Real} = Base.FastMath.mul_fast(T(-0.5), Base.FastMath.abs2_fast(y))
-@inline Normal(::Val{true}, y::Real) = Normal(y)
-@inline Normal(::Val{false}, y::T) where {T <: Real} = zero(T)
+@inline Normal(::Val{(true,)}, y::Real) = Normal(y)
+@inline Normal(::Val{(false,)}, y::T) where {T <: Real} = zero(T)
 @inline function ∂Normal!(∂y::U, y::T) where {T <: Real, U}
     t = Base.FastMath.mul_fast(T(-0.5), Base.FastMath.abs2_fast(y))
     if isinitialized(U)
-        ∂y[] = FastMat.sub_fast(∂y[], y)
+        ∂y[] = Base.FastMath.sub_fast(∂y[], y)
     else
-        ∂y[] = FastMat.sub_fast(y)
+        ∂y[] = Base.FastMath.sub_fast(y)
     end
     t
 end
@@ -296,7 +296,7 @@ for yisvec ∈ (true,false)
             ∂track_μ = false
         end
         ∂args3 = push!(copy(∂args2), :(∂σ::∂ΣN))
-        args3 = push!(copy(args2), yisvec ? :(σin::Union{T,Int,RealFloat{<:Any,T},Precision{T},<:AbstractFixedSizeArray{S,T,N,R,L}}) : :(σin::Union{T,Int,RealFloat{<:Any,T},Precision{T}}))
+        args3 = push!(copy(args2), yisvec ? :(σin::Union{T,Int,RealFloat{<:Any,T},Precision,<:AbstractFixedSizeArray{S,T,N,R,L}}) : :(σin::Union{T,Int,RealFloat{<:Any,T},Precision{T}}))
         # @show μ, args3, μisvec
         for calclogdet ∈ (true,false)
             n = calclogdet ? :Normal : :Normal_kernel

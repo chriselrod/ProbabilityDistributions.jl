@@ -8,16 +8,19 @@ ld    : multiply with -logdet_coef to get logdet component of density
 ∂k∂i  : multiply with δ²σ⁻² to get ∂kernel-component/∂input
 ∂ld∂i : multiply with -logdet_coef to get ∂logdet-component/∂input
 """
-struct Precision{T,P}
+struct Precision{T,P,D}
     σ⁻²::T
-    ld::T
+    ld::D
     ∂k∂i::P
 end
-# struct PrecisionArray{I,P}
-    # σ⁻¹::I
-    # σ⁻²::P
-    # logσ::L
-# end
+struct PrecisionArray{S,T,N,X,L,V<:AbstractFixedSizeArray{S,T,N,X,L},P,D<:AbstractFixedSizeArray{S,T,N,X,L}} <: AbstractFixedSizeArray{S,T,N,X,L}
+    σ⁻²::V
+    ld::D
+    ∂k∂i::P
+end
+@inline Base.getindex(A::PrecisionArray, i...) = A.σ⁻²[i...]
+const AbstractPrecision{T,P,D} = Union{Precision{T,P,D},PrecisionArray{<:Any,<:Any,<:Any,<:Any,<:Any,T,P,D}}
+
 using ReverseDiffExpressionsBase: One, Zero
 
 @inline logdet_coef(Y, args...) = Float64(size(Y, 1))
@@ -33,17 +36,17 @@ end
     Precision( σ⁻², log(σ), σ⁻¹ )
 end
 @inline precision(v) = SIMDPirates.vabs2(SIMDPirates.vinv(v))
-@inline function canonicalize_Σ(σ::AbstractFixedSizeArray)
+@inline function canonicalize_Σ(σ::AbstractFixedSizeArray{S,T,N,X,L}) where {S,T,N,X,L}
     σ⁻² = LazyMap( precision, σ )
     logσ = LazyMap( SLEEFPirates.log, σ )
-    Precision( σ⁻², logσ, nothing )
+    PrecisionArray{S,T,N,X,L,typeof(σ⁻²),Nothing,typeof(logσ)}( σ⁻², logσ, nothing )
 end
-@inline function ∂canonicalize_Σ(σ::AbstractFixedSizeArray)
+@inline function ∂canonicalize_Σ(σ::AbstractFixedSizeArray{S,T,N,X,L}) where {S,T,N,X,L}
     # Trust compiler to elliminate redundant
     σ⁻¹ = LazyMap( vinv, σ ) 
     σ⁻² = LazyMap( precision, σ )
     logσ = LazyMap( SLEEFPirates.log, σ )
-    Precision( σ⁻², logσ, σ⁻¹ )
+    PrecisionArray{S,T,N,X,L,typeof(σ⁻²),typeof(σ⁻¹),typeof(logσ)}( σ⁻², logσ, σ⁻¹ )
 end
 @inline function canonicalize_Σ(σ::S) where {S <: Integer}
     T = promote_type(S, Float64)
@@ -57,24 +60,39 @@ end
         σ⁻², Base.FastMat.div_fast(Base.log(σ⁻²),2), nothing
     )
 end
-@inline canonicalize_Σ(σ::Precision) = σ
-@inline Base.inv(σ::Precision) = σ.σ⁻¹
-@inline SIMDPirates.vinv(σ::Precision) = σ.σ⁻¹
-@inline loginvroot(σ::Precision) = σ.logσ
+@inline canonicalize_Σ(σ::AbstractPrecision) = σ
+@inline ∂canonicalize_Σ(σ::AbstractPrecision) = σ
+@inline Base.inv(σ::AbstractPrecision) = σ.σb⁻¹
+@inline SIMDPirates.vinv(σ::AbstractPrecision) = σ.σ⁻¹
+@inline loginvroot(σ::AbstractPrecision) = σ.logσ
+@inline function Base.materialize(σ::Precision)
+    Precision(
+        Base.materialize(σ.σ⁻²),
+        Base.materialize(σ.ld),
+        Base.materialize(σ.∂k∂i)
+    )
+end
+@inline function Base.materialize(σ::PrecisionArray{S,T,N,X,L,V,P,D}) where {S,T,N,X,L,V,P,D}
+    PrecisionArray{S,T,N,X,L,V,P,D}(
+        Base.materialize(σ.σ⁻²),
+        Base.materialize(σ.ld),
+        Base.materialize(σ.∂k∂i)
+    )
+end
 # @inline Base.inv(σ::Union{Precision,PrecisionArray}) = σ.σ⁻¹
 # @inline SIMDPirates.vinv(σ::Union{Precision,PrecisionArray}) = σ.σ⁻¹
 # @inline loginvroot(σ::Union{Precision,PrecisionArray}) = σ.logσ
 
-@inline precision(λ::Precision) = λ.σ⁻²
+@inline precision(λ::AbstractPrecision) = λ.σ⁻²
 @inline precision(::One) = One()
-@inline LinearAlgebra.logdet(λ::Precision) = λ.ld
-@inline StructuredMatrices.nlogdet(λ::Precision) = Base.FastMath.sub_fast(λ.ld)
+@inline LinearAlgebra.logdet(λ::AbstractPrecision) = λ.ld
+@inline StructuredMatrices.nlogdet(λ::AbstractPrecision) = Base.FastMath.sub_fast(λ.ld)
 @inline LinearAlgebra.logdet(::One) = Zero()
 @inline StructuredMatrices.nlogdet(::One) = Zero()
-@inline ∂k∂i(λ::Precision) = λ.∂k∂i
-@inline ∂k∂i(λ::Precision{T,Nothing}) where {T} = Base.FastMath.mul_fast(T(0.5), λ.σ⁻²) # Variance
-@inline ∂ld∂i(λ::Precision{T,Nothing}) where {T} = Base.FastMath.mul_fast(T(0.5), λ.σ⁻²) # Variance
-@inline ∂ld∂i(λ::Precision{T,P}) where {T,P<:Real} = λ.∂k∂i # St.Dev
+@inline ∂k∂i(λ::AbstractPrecision) = λ.∂k∂i
+@inline ∂k∂i(λ::AbstractPrecision{T,Nothing}) where {T} = Base.FastMath.mul_fast(T(0.5), λ.σ⁻²) # Variance
+@inline ∂ld∂i(λ::AbstractPrecision{T,Nothing}) where {T} = Base.FastMath.mul_fast(T(0.5), λ.σ⁻²) # Variance
+@inline ∂ld∂i(λ::AbstractPrecision{T,P}) where {T,P<:Real} = λ.∂k∂i # St.Dev
 
 """
 The normal distribution can be split into
