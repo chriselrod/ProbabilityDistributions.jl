@@ -14,10 +14,9 @@ function univariate_normal_quote(
             qf = SIMDPirates.vbroadcast($(VectorizationBase.pick_vector(M,T)), zero($T))
         end
     else
-        pre_quote = quote
-            qf = zero($T)
-        end
+        pre_quote = quote qf = zero($T) end
     end
+    push!(pre_quote.args, :(σ = ∂canonicalize_Σ(σin)))
     return_expr = quote end
     if yisvec # not allowed to be nothing, must be bool
         yexpr = :(y[i])
@@ -109,7 +108,7 @@ function univariate_normal_quote(
                 else
                     push!(loop_expr.args, :(∂μ[i] += δσ⁻²))
                 end
-            elseif μisvec# == false
+            else#if μisvec == false
                 if yisvec
                     push!(pre_quote.args, :(∂μs = zero($T)))
                     push!(loop_expr.args, :(∂μs += δσ⁻²))
@@ -130,15 +129,15 @@ function univariate_normal_quote(
                     set∂σ = :(∂k∂σ[i] * δσ⁻²)
                 end
                 push!(loop_expr.args, Expr(eq, :(∂σ[i]), set∂σ))
-            elseif σisvec# == false
+            else#if σisvec == false
                 if calclogdet
                     if yisvec
-                        push!(return_expr.args, Expr(eq, :(∂σ[]), :(∂k∂i(σ) * qf + $(T(-M)) * ∂ld∂i(σ))))
+                        push!(return_expr.args, Expr(eq, :(∂σ[]), :(∂k∂i(σ) * vsum(qf) - $(T(M)) * ∂ld∂i(σ))))
                     else
-                        push!(return_expr.args, Expr(eq, :(∂σ[]), :(∂k∂i(σ) * qf - ∂ld∂i(σ))))
+                        push!(return_expr.args, Expr(eq, :(∂σ[]), :(∂k∂i(σ) * vsum(qf) - ∂ld∂i(σ))))
                     end
                 else
-                    push!(return_expr.args, Expr(eq, :(∂σ[]), :(∂k∂i(σ) * qf)))
+                    push!(return_expr.args, Expr(eq, :(∂σ[]), :(∂k∂i(σ) * vsum(qf))))
                 end
             end
         end
@@ -270,7 +269,7 @@ for yisvec ∈ (true,false)
         args1 = [:(y::AbstractFixedSizeArray{S,T,N,R,L})]
         M = :(univariate_normal_length(S.parameters, N, R.parameters, L))
         whereparams = [:S,:T,:N,:R,:L]
-        σisvec = :(σ <: AbstractFixedSizeArray)
+        σisvec = :(σin <: AbstractFixedSizeArray)
     else
         args1 = [:(y::T)]
         M = 1
@@ -297,7 +296,7 @@ for yisvec ∈ (true,false)
             ∂track_μ = false
         end
         ∂args3 = push!(copy(∂args2), :(∂σ::∂ΣN))
-        args3 = push!(copy(args2), yisvec ? :(σ::Union{T,Int,<:AbstractFixedSizeArray{S,T,N,R,L}}) : :(σ::Union{T,Int}))
+        args3 = push!(copy(args2), yisvec ? :(σin::Union{T,Int,RealFloat{<:Any,T},Precision{T},<:AbstractFixedSizeArray{S,T,N,R,L}}) : :(σin::Union{T,Int,RealFloat{<:Any,T},Precision{T}}))
         # @show μ, args3, μisvec
         for calclogdet ∈ (true,false)
             n = calclogdet ? :Normal : :Normal_kernel
@@ -306,6 +305,14 @@ for yisvec ∈ (true,false)
                 univariate_normal_quote(
                     $M, T, $yisvec, $μisvec, $σisvec,
                     (first(track), $track_μ, last(track)),
+                    (false, false, false),
+                    false, $calclogdet
+                )
+            end
+            @eval @generated function $n($(args3...)) where {$(whereparams...)}
+                univariate_normal_quote(
+                    $M, T, $yisvec, $μisvec, $σisvec,
+                    ((true, $μ, true)),
                     (false, false, false),
                     false, $calclogdet
                 )

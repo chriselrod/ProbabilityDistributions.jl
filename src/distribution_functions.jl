@@ -916,14 +916,32 @@ end
     βisvec = isa(β, PaddedMatrices.AbstractFixedSizeVector)
     gamma_alloc_quote(M, T, (true, αisvec, βisvec), track, true)
 end
-@generated function Gamma(::Val{track}, y::T, α::T, β::T) where {track,T <: Real}
+@generated function Gamma(::Val{track}, y::Union{T,RealFloat{<:Any,T}}, α::T, β::T) where {track,T <: Real}
     gamma_quote(1, T, (false, false, false), track, false)
 end
-@generated function ∂Gamma(::Val{track}, y::T, α::T, β::T) where {track,T <: Real}
+@generated function ∂Gamma(::Val{track}, y::Union{T,RealFloat{<:Any,T}}, α::T, β::T) where {track,T <: Real}
     gamma_alloc_quote(1, T, (false, false, false), track, false)
 end
-@generated function ∂Gamma(sp::StackPointer, ::Val{track}, y::T, α::T, β::T) where {track,T <: Real}
+@generated function ∂Gamma(sp::StackPointer, ::Val{track}, y::Union{T,RealFloat{<:Any,T}}, α::T, β::T) where {track,T <: Real}
     gamma_alloc_quote(1, T, (false, false, false), track, true)
+end
+@generated function ∂Gamma!(
+    ∂y::∂YN, ∂α::∂ΑN, ∂β::∂ΒN,
+    y::Union{T,<:RealFloat{<:Any,T}},
+    α::Union{T,<:RealFloat{<:Any,T}},
+    β::Union{T,<:RealFloat{<:Any,T}}
+) where {∂YN, ∂ΑN, ∂ΒN, T}
+    track_y = ∂YN !== Nothing
+    track_α = ∂ΑN !== Nothing
+    track_β = ∂ΒN !== Nothing
+    inity = !isinitialized(∂YN)
+    initα = !isinitialized(∂ΑN)
+    initβ = !isinitialized(∂ΒN)
+    gamma_quote(
+        1, T, (false,false,false),
+        (track_y, track_α, track_β), true,
+        (inity, initα, initβ)
+    )
 end
 
 push!(DISTRIBUTION_DIFF_RULES, :Gamma)

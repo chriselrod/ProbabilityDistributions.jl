@@ -8,12 +8,12 @@ ld    : multiply with -logdet_coef to get logdet component of density
 ∂k∂i  : multiply with δ²σ⁻² to get ∂kernel-component/∂input
 ∂ld∂i : multiply with -logdet_coef to get ∂logdet-component/∂input
 """
-struct Precision{T,P,L}
+struct Precision{T,P}
     σ⁻²::T
     ld::T
     ∂k∂i::P
 end
-# struct PrecisionArray{I,P,L}
+# struct PrecisionArray{I,P}
     # σ⁻¹::I
     # σ⁻²::P
     # logσ::L
@@ -57,6 +57,7 @@ end
         σ⁻², Base.FastMat.div_fast(Base.log(σ⁻²),2), nothing
     )
 end
+@inline canonicalize_Σ(σ::Precision) = σ
 @inline Base.inv(σ::Precision) = σ.σ⁻¹
 @inline SIMDPirates.vinv(σ::Precision) = σ.σ⁻¹
 @inline loginvroot(σ::Precision) = σ.logσ
