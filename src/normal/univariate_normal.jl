@@ -237,6 +237,71 @@ end
 @inline Normal(y::T) where {T <: Real} = Base.FastMath.mul_fast(T(-0.5), Base.FastMath.abs2_fast(y))
 @inline Normal(::Val{(true,)}, y::Real) = Normal(y)
 @inline Normal(::Val{(false,)}, y::T) where {T <: Real} = zero(T)
+
+@generated function Normal(::Val{(true,)}, y::AbstractFixedSizeArray{S,T,N,X,L}) where {S,T,N,X,L}
+    nrows = first(S.parameters)::Int
+    if N > 1 && first(S.parameters)::Int != (X.parameters[2])::Int
+        P = (X.parameters[2])::Int
+        W = VectorizationBase.pick_vector_width(nrows, T)
+        return quote
+            out = vbroadcast(Vec{$W,$T}, zero($T))
+            ind = 0
+            Base.Cartesian.@nloops $(N-1) i j -> 1:size(y,j+1) begin
+                @vvectorize $T 4 for i_0 ∈ 1:$nrows
+                    yᵢ = y[ind + i_0]
+                    out = vmuladd(yᵢ, yᵢ, out)
+                end
+                ind += $P
+            end
+            vmul($(T(-0.5)), out)
+        end
+    else #if N == 1
+        M = N == 1 ? nrows : L
+        W = VectorizationBase.pick_vector_width(M, T)
+        return quote
+            out = vbroadcast(Vec{$W,$T}, zero($T))
+            @vvectorize $T 4 for m ∈ 1:$M
+                yₘ = y[m]
+                out = vmuladd(yₘ, yₘ, out)
+            end
+            vmul($(T(-0.5)), out)
+        end
+    end
+end
+@generated function ∂Normal!(∂y::AbstractFixedSizeArray{S,T,N,X,L}, y::AbstractFixedSizeArray{S,T,N,X,L}) where {S,T,N,X,L}
+    nrows = first(S.parameters)::Int
+    if N > 1 && first(S.parameters)::Int != (X.parameters[2])::Int
+        P = (X.parameters[2])::Int
+        W = VectorizationBase.pick_vector_width(nrows, T)
+        return quote
+            out = vbroadcast(Vec{$W,$T}, zero($T))
+            ind = 0
+            Base.Cartesian.@nloops $(N-1) i j -> 1:size(y,j+1) begin
+                @vvectorize $T 4 for i_0 ∈ 1:$nrows
+                    yᵢ = y[ind + i_0]
+                    ∂y[ind + i_0] = -yᵢ
+                    out = vmuladd(yᵢ, yᵢ, out)
+                end
+                ind += $P
+            end
+            vmul($(T(-0.5)), out)
+        end
+    else #if N == 1
+        M = N == 1 ? nrows : L
+        W = VectorizationBase.pick_vector_width(M, T)
+        return quote
+            out = vbroadcast(Vec{$W,$T}, zero($T))
+            @vvectorize $T 4 for m ∈ 1:$M
+                yₘ = y[m]
+                ∂y[m] = -yₘ
+                out = vmuladd(yₘ, yₘ, out)
+            end
+            vmul($(T(-0.5)), out)
+        end
+    end
+end
+
+
 @inline function ∂Normal!(∂y::U, y::T) where {T <: Real, U}
     t = Base.FastMath.mul_fast(T(-0.5), Base.FastMath.abs2_fast(y))
     if isinitialized(U)
