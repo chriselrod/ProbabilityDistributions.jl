@@ -75,7 +75,7 @@ end
     W, Wshift = VectorizationBase.pick_vector_width_shift(P, T)
     track_Y, track_μ, track_Σ = track
     q = quote
-        $(Expr(:meta,:inline))
+        # $(Expr(:meta,:inline))
         coffset = 0
         for k ∈ 1:$K
             Yₖ = Y[k]
@@ -156,7 +156,7 @@ end
 
 
     q = quote
-        $(Expr(:meta,:inline)) # work-around for SIMD-corruption bug
+        # $(Expr(:meta,:inline)) # work-around for SIMD-corruption bug
         coloffset_0 = 0
         ptr_δ = pointer(δ)
     end
@@ -278,7 +278,7 @@ end
         # Inlined because of:
         # https://github.com/JuliaLang/julia/issues/32414
         # Stop forcing inlining when the issue is fixed.
-        $(Expr(:meta,:inline))
+        # $(Expr(:meta,:inline))
 
         cols = 0
         @inbounds for k ∈ 1:$K
@@ -326,7 +326,7 @@ end
     track_μ && push!(∂retout.args, :(∂μ[1]))
     track_Σ && push!(∂retout.args, :∂Σ)
     quote
-        $(Expr(:meta,:inline))
+        # $(Expr(:meta,:inline))
         (sp, $∂retin) = ∂Normal(sp, (Y,), (μ,), Σ, Val{$track}())
         @inbounds (sp, $∂retout)
     end

@@ -86,7 +86,7 @@ push!(FMADD_DISTRIBUTIONS, :Bernoulli_logit)
 function Bernoulli_logit_quote(T)
     W = VectorizationBase.pick_vector_width(T)
     q = quote
-        $(Expr(:meta, :inline))
+        # $(Expr(:meta, :inline))
         target = vbroadcast(Vec{$W,$T}, zero($T))
         @vvectorize $T for i ∈ eachindex(y)
             αᵢ = α[i]
@@ -116,7 +116,7 @@ function ∂Bernoulli_logit_quote(T, initialized::Bool = false)
     W = VectorizationBase.pick_vector_width(T)
     ∂αop = initialized ? :(+=) : :(=)
     q = quote
-        $(Expr(:meta, :inline))
+        # $(Expr(:meta, :inline))
         target = vbroadcast(Vec{$W,$T}, zero($T))
         @vvectorize $T for i ∈ eachindex(y)
             αᵢ = α[i]
@@ -172,7 +172,7 @@ push!(DISTRIBUTION_DIFF_RULES, :Bernoulli_logit)
 function Binomial_logit_quote(T, yconst::Bool = false)
     W = VectorizationBase.pick_vector_width(T)
     q = quote
-        $(Expr(:meta, :inline))
+        # $(Expr(:meta, :inline))
         target = vbroadcast(Vec{$W,$T}, zero($T))
         @vvectorize $T for i ∈ eachindex(s)
             αᵢ = α[i]
@@ -240,7 +240,7 @@ function ∂Binomial_logit_quote(T, nconst::Bool = false, initialized::Bool = fa
     W = VectorizationBase.pick_vector_width(T)
     ∂αop = initialized ? :(+=) : :(=)
     q = quote
-        $(Expr(:meta, :inline))
+        # $(Expr(:meta, :inline))
         target = vbroadcast(Vec{$W,$T}, zero($T))
         @vvectorize $T for i ∈ eachindex(s)
             αᵢ = α[i]
@@ -308,7 +308,7 @@ push!(DISTRIBUTION_DIFF_RULES, :Binomial_logit)
     if PaddedMatrices.is_sized(β)
         N_β = PaddedMatrices.type_length(β)
         q = quote
-            $(Expr(:meta, :inline))
+            # $(Expr(:meta, :inline))
             # T = promote_type(eltype(α),eltype(β),eltype(X))
 #            target = zero($T)
             target = vbroadcast(Vec{$(VectorizationBase.pick_vector_width(T)),$T}, zero($T))
@@ -396,7 +396,7 @@ Bernoulli_logit_constant(y, X, β, α, ::Any) = zero(eltype(β))
         W, Wshift = VectorizationBase.pick_vector_width_shift(T)
         # unroll_factor = max(8 >>> Wshift, 1)
         q = quote
-            $(Expr(:meta, :inline))
+            # $(Expr(:meta, :inline))
             $init_q
             @vvectorize $T for i ∈ eachindex(y)
                 # a = $(Expr(:call, :+, :α, [:(X[i,$n] * β[$n]) for n ∈ 1:N_β]...))
@@ -436,7 +436,7 @@ push!(DISTRIBUTION_DIFF_RULES, :Bernoulli_logit)
     end
     if track_L
         q = quote
-            $(Expr(:meta,:inline))
+            # $(Expr(:meta, :inline))
             target = vbroadcast(SVec{$W,$T}, zero($T))
             logd = logdiag(L)
             @vvectorize $T for n ∈ 1:$(rem1 ? N-1 : N)
@@ -504,7 +504,7 @@ end
     end
     if track_η
         q = quote
-            $(Expr(:meta,:inline))
+            # $(Expr(:meta, :inline))
             target = vbroadcast(SVec{$W,$T}, zero($T))
             logd = logdiag(L)
             ∂ηs = zero($T)
@@ -566,7 +566,7 @@ end
             pushfirst!(q.args, zeroq)
             pushfirst!(q.args, :(@inbounds ∂L[1] = zero($T)))
         end
-        pushfirst!(q.args, Expr(:meta,:inline))
+        # pushfirst!(q.args, Expr(:meta,:inline))
     else
         q = quote
             target = vbroadcast(SVec{$W,$T}, zero($T))
@@ -582,7 +582,7 @@ end
             pushfirst!(q.args, :(@inbounds ∂L[1] = zero($T)))
             push!(q.args, zeroq)
         end
-        pushfirst!(q.args, Expr(:meta,:inline))
+        # pushfirst!(q.args, Expr(:meta,:inline))
         push!(q.args, :(extract_data(target)))
     end
     simplify_expr(q)
@@ -774,7 +774,7 @@ function gamma_quote(
     end
     q = if loop
         quote
-            $(Expr(:meta,:inline))
+            # $(Expr(:meta,:inline))
             @fastmath begin
                 $pre_quote
             end
@@ -790,7 +790,7 @@ function gamma_quote(
         end
     else
         quote
-            $(Expr(:meta,:inline))
+            # $(Expr(:meta,:inline))
             @fastmath begin
                 $pre_quote
                 $q
@@ -1122,7 +1122,7 @@ function beta_quote(M, T, (yisvec, αisvec, βisvec), (track_y, track_α, track_
     end
     q = if loop
         quote
-            $(Expr(:meta,:inline))
+            # $(Expr(:meta,:inline))
             @fastmath begin
                 $pre_quote
                 target = vbroadcast(Vec{$(VectorizationBase.pick_vector_width(T)),$T}, zero($T))
@@ -1138,7 +1138,7 @@ function beta_quote(M, T, (yisvec, αisvec, βisvec), (track_y, track_α, track_
         end
     else
         quote
-            $(Expr(:meta,:inline))
+            # $(Expr(:meta,:inline))
             @fastmath begin
                 $pre_quote
                 $q
@@ -1290,7 +1290,7 @@ function lsgg_quote(
             return quote
                 # Inlined because of Julia SIMD corruption bug (if sp)
                 # inlined to avoid heap allocation of mvector (if !sp)
-                $(Expr(:meta,:inline))
+                # $(Expr(:meta,:inline))
                 target = SIMDPirates.vbroadcast(Vec{$W,$T}, zero($T))
                 LoopVectorization.@vvectorize for m ∈ 1:$M
                     $q
@@ -1314,7 +1314,7 @@ function lsgg_quote(
         if yisvec
             return quote
                 # Inlined because of Julia SIMD corruption bug
-                $(Expr(:meta,:inline))
+                # $(Expr(:meta,:inline))
                 target = SIMDPirates.vbroadcast(Vec{$W,$T}, zero($T))
                 LoopVectorization.@vvectorize for m ∈ 1:$M
                     $q
@@ -1345,7 +1345,7 @@ function lsgg_alloc_quote(
         return quote
             # Inlined because of Julia SIMD corruption bug (if sp)
             # inlined to avoid heap allocation of mvector (if !sp)
-            $(Expr(:meta,:inline))
+            # $(Expr(:meta,:inline))
             $(sp ? :((sp, ∂y) = PtrVector{$M,$T}(sp)) : :( ∂y = FixedSizeVector{$M,$T}(undef)))
             target = ∂lsgg!(uninitialized(∂y),nothing,nothing,nothing,nothing,y,α,ϕ,δ,σ)
             $(sp ? :(sp, (target, ∂y)) : :(target, ∂y))

@@ -162,7 +162,7 @@ function univariate_normal_quote(
             end
         end
         quote
-            $(Expr(:meta,:inline))
+            # $(Expr(:meta,:inline))
             $pre_quote
             $(macroexpand(ProbabilityDistributions, loop_expr))
             $return_expr
@@ -170,7 +170,7 @@ function univariate_normal_quote(
         end
     else
         quote
-            $(Expr(:meta,:inline))
+            # $(Expr(:meta,:inline))
             @fastmath begin
                 $pre_quote
                 $loop_expr
@@ -179,6 +179,7 @@ function univariate_normal_quote(
             $retex
         end
     end
+    (yisvec && !σisvec) && pushfirst!(q.args, Expr(:meta, :inline)) # inline Target...
     simplify_expr(q)
 end
 function alloc_univariate_normal_quote(M, S, @nospecialize(T), (track_y, track_μ, track_σ), sp = true)
@@ -226,16 +227,10 @@ function alloc_univariate_normal_quote(M, S, @nospecialize(T), (track_y, track_�
     q
 end
 
-@noinline function univariate_normal_length(SV::Core.SimpleVector, N, RV::Core.SimpleVector, L)
-    fsv = first(SV)::Int
-    first(RV)::Int == 1 || throw("Non-unit stride not yet supported.")
-    if N == 1
-        M = fsv
-    else
-        fsv == (RV[2])::Int || throw("Arrays with more than 1 dimension cannot be padded.")
-        M = L
-    end
-    M
+@noinline function univariate_normal_length(SV::Core.SimpleVector, RV::Core.SimpleVector)
+    PaddedMatrices.isdense(SV, RV) || throw("Non-unit stride not yet supported.")
+    # because isdense passed, last(RV) must equal prod(SV[1:N-1])
+    last(RV)::Int * last(SV)::Int
 end
 
 @inline Normal(y::T) where {T <: Real} = Base.FastMath.mul_fast(T(-0.5), Base.FastMath.abs2_fast(y))
@@ -244,7 +239,18 @@ end
 
 @generated function Normal(::Val{(true,)}, y::AbstractFixedSizeArray{S,T,N,X,L}) where {S,T,N,X,L}
     nrows = first(S.parameters)::Int
-    if N > 1 && first(S.parameters)::Int != (X.parameters[2])::Int
+    if PaddedMatrices.isdense(S.parameters, X.parameters)
+        M = N == 1 ? nrows : L
+        W = VectorizationBase.pick_vector_width(M, T)
+        return quote
+            out = vbroadcast(Vec{$W,$T}, zero($T))
+            @vvectorize $T 4 for m ∈ 1:$M
+                yₘ = y[m]
+                out = vmuladd(yₘ, yₘ, out)
+            end
+            vmul($(T(-0.5)), out)
+        end
+    else
         P = (X.parameters[2])::Int
         W = VectorizationBase.pick_vector_width(nrows, T)
         return quote
@@ -259,22 +265,23 @@ end
             end
             vmul($(T(-0.5)), out)
         end
-    else #if N == 1
+    end
+end
+@generated function ∂Normal!(∂y::AbstractFixedSizeArray{S,T,N,X,L}, y::AbstractFixedSizeArray{S,T,N,X,L}) where {S,T,N,X,L}
+    nrows = first(S.parameters)::Int
+    if PaddedMatrices.isdense(S.parameters, X.parameters)
         M = N == 1 ? nrows : L
         W = VectorizationBase.pick_vector_width(M, T)
         return quote
             out = vbroadcast(Vec{$W,$T}, zero($T))
             @vvectorize $T 4 for m ∈ 1:$M
                 yₘ = y[m]
+                ∂y[m] = -yₘ
                 out = vmuladd(yₘ, yₘ, out)
             end
             vmul($(T(-0.5)), out)
         end
-    end
-end
-@generated function ∂Normal!(∂y::AbstractFixedSizeArray{S,T,N,X,L}, y::AbstractFixedSizeArray{S,T,N,X,L}) where {S,T,N,X,L}
-    nrows = first(S.parameters)::Int
-    if N > 1 && first(S.parameters)::Int != (X.parameters[2])::Int
+    else
         P = (X.parameters[2])::Int
         W = VectorizationBase.pick_vector_width(nrows, T)
         return quote
@@ -287,18 +294,6 @@ end
                     out = vmuladd(yᵢ, yᵢ, out)
                 end
                 ind += $P
-            end
-            vmul($(T(-0.5)), out)
-        end
-    else #if N == 1
-        M = N == 1 ? nrows : L
-        W = VectorizationBase.pick_vector_width(M, T)
-        return quote
-            out = vbroadcast(Vec{$W,$T}, zero($T))
-            @vvectorize $T 4 for m ∈ 1:$M
-                yₘ = y[m]
-                ∂y[m] = -yₘ
-                out = vmuladd(yₘ, yₘ, out)
             end
             vmul($(T(-0.5)), out)
         end
@@ -317,13 +312,14 @@ end
 end
 @inline ∂Normal!(::Nothing, y::T) where {T <: Real} = zero(T)
 @generated function Normal_kernel(x::AbstractFixedSizeArray{S,T,N,X,L}) where {S,T,N,X,L}
-    P = univariate_normal_length(S.parameters, N, X.parameters, L)
+    P = univariate_normal_length(S.parameters, X.parameters)
     V = VectorizationBase.pick_vector(P,T)
     quote
-        $(Expr(:meta,:inline))
+        # $(Expr(:meta,:inline))
         target = vbroadcast($V, zero($T))
         @vvectorize $T 4 for p ∈ 1:$P
-            target = vmuladd(x[p], x[p], target)
+            xₚ = x[p]
+            target = vmuladd(xₚ, xₚ, target)
         end
         vmul(target, vbroadcast($V, $(T(-0.5))))
     end
@@ -336,7 +332,7 @@ end
 for yisvec ∈ (true,false)
     if yisvec
         args1 = [:(y::AbstractFixedSizeArray{S,T,N,R,L})]
-        M = :(univariate_normal_length(S.parameters, N, R.parameters, L))
+        M = :(univariate_normal_length(S.parameters, R.parameters))
         whereparams = [:S,:N,:R,:L]
         σisvec = :(σin <: AbstractFixedSizeArray)
     else
