@@ -16,7 +16,11 @@ function univariate_normal_quote(
     else
         pre_quote = quote qf = zero($T) end
     end
-    push!(pre_quote.args, :(σ = ∂canonicalize_Σ(σin)))
+    if partial && track_σ
+        push!(pre_quote.args, :(σ = ∂canonicalize_Σ(σin)))
+    else
+        push!(pre_quote.args, :(σ = canonicalize_Σ(σin)))
+    end
     return_expr = quote end
     if yisvec # not allowed to be nothing, must be bool
         yexpr = :(y[i])

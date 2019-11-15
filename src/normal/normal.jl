@@ -73,7 +73,7 @@ end
     )
 end
 @inline function Base.materialize(σ::PrecisionArray{S,T,N,X,L,V,P,D}) where {S,T,N,X,L,V,P,D}
-    PrecisionArray{S,T,N,X,L,V,P,D}(
+    PrecisionArray(
         Base.materialize(σ.σ⁻²),
         Base.materialize(σ.ld),
         Base.materialize(σ.∂k∂i)
