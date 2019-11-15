@@ -333,12 +333,12 @@ for yisvec ∈ (true,false)
     if yisvec
         args1 = [:(y::AbstractFixedSizeArray{S,T,N,R,L})]
         M = :(univariate_normal_length(S.parameters, N, R.parameters, L))
-        whereparams = [:S,:T,:N,:R,:L]
+        whereparams = [:S,:N,:R,:L]
         σisvec = :(σin <: AbstractFixedSizeArray)
     else
-        args1 = [:(y::T)]
+        args1 = [:(y::Union{T,RealFloat{<:Any,T}})]
         M = 1
-        whereparams = [:T]
+        whereparams = Symbol[]
         σisvec = false
     end
     ∂args1 = [:(∂y::∂YN)]; ∂whereparams1 = [:∂YN, :∂ΣN]
@@ -366,7 +366,7 @@ for yisvec ∈ (true,false)
         for calclogdet ∈ (true,false)
             n = calclogdet ? :Normal : :Normal_kernel
             ∂n = calclogdet ? :∂Normal! : :∂Normal_kernel!
-            @eval @generated function $n(::Val{track}, $(args3...)) where {track, $(whereparams...)}
+            @eval @generated function $n(::Val{track}, $(args3...)) where {track, $(whereparams...), T <: Union{Float32,Float64}}
                 univariate_normal_quote(
                     $M, T, $yisvec, $μisvec, $σisvec,
                     (first(track), $track_μ, last(track)),
@@ -374,7 +374,7 @@ for yisvec ∈ (true,false)
                     false, $calclogdet
                 )
             end
-            @eval @generated function $n($(args3...)) where {$(whereparams...)}
+            @eval @generated function $n($(args3...)) where {$(whereparams...), T <: Union{Float32,Float64}}
                 univariate_normal_quote(
                     $M, T, $yisvec, $μisvec, $σisvec,
                     ((true, $μ, true)),
@@ -383,7 +383,7 @@ for yisvec ∈ (true,false)
                 )
             end
             
-            @eval @generated function $∂n($(∂args3...), $(args3...)) where {$(∂whereparams2...), $(whereparams...)}
+            @eval @generated function $∂n($(∂args3...), $(args3...)) where {$(∂whereparams2...), $(whereparams...), T <: Union{Float32,Float64}}
                 univariate_normal_quote(
                     $M, T, $yisvec, $μisvec, $σisvec,
                     (∂YN !== Nothing, $∂track_μ, ∂ΣN !== Nothing),
