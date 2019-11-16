@@ -179,7 +179,9 @@ function univariate_normal_quote(
             $retex
         end
     end
-    (yisvec && !σisvec) && pushfirst!(q.args, Expr(:meta, :inline)) # inline Target...
+    if (yisvec && !σisvec) || (4VectorizationBase.pick_vector_width(T) <= M)
+        pushfirst!(q.args, Expr(:meta, :inline)) # inline Target...
+    end
     simplify_expr(q)
 end
 function alloc_univariate_normal_quote(M, S, @nospecialize(T), (track_y, track_μ, track_σ), sp = true)
@@ -242,7 +244,7 @@ end
     if PaddedMatrices.isdense(S.parameters, X.parameters)
         M = N == 1 ? nrows : L
         W = VectorizationBase.pick_vector_width(M, T)
-        return quote
+        q = quote
             out = vbroadcast(Vec{$W,$T}, zero($T))
             @vvectorize $T 4 for m ∈ 1:$M
                 yₘ = y[m]
@@ -250,6 +252,8 @@ end
             end
             vmul($(T(-0.5)), out)
         end
+        (4VectorizationBase.pick_vector_width(T) <= M) && pushfirst!(q.args, Expr(:meta, :inline))
+        q
     else
         P = (X.parameters[2])::Int
         W = VectorizationBase.pick_vector_width(nrows, T)
@@ -272,7 +276,7 @@ end
     if PaddedMatrices.isdense(S.parameters, X.parameters)
         M = N == 1 ? nrows : L
         W = VectorizationBase.pick_vector_width(M, T)
-        return quote
+        q = quote
             out = vbroadcast(Vec{$W,$T}, zero($T))
             @vvectorize $T 4 for m ∈ 1:$M
                 yₘ = y[m]
@@ -281,6 +285,8 @@ end
             end
             vmul($(T(-0.5)), out)
         end
+        (4VectorizationBase.pick_vector_width(T) <= M) && pushfirst!(q.args, Expr(:meta, :inline))
+        return q
     else
         P = (X.parameters[2])::Int
         W = VectorizationBase.pick_vector_width(nrows, T)
@@ -314,7 +320,7 @@ end
 @generated function Normal_kernel(x::AbstractFixedSizeArray{S,T,N,X,L}) where {S,T,N,X,L}
     P = univariate_normal_length(S.parameters, X.parameters)
     V = VectorizationBase.pick_vector(P,T)
-    quote
+    q = quote
         # $(Expr(:meta,:inline))
         target = vbroadcast($V, zero($T))
         @vvectorize $T 4 for p ∈ 1:$P
@@ -323,6 +329,8 @@ end
         end
         vmul(target, vbroadcast($V, $(T(-0.5))))
     end
+    (4VectorizationBase.pick_vector_width(T) <= P) && pushfirst!(q.args, Expr(:meta, :inline))
+    q
 end
 @inline function Normal_kernel(::Val{track}, x::AbstractFixedSizeArray{S,T}) where {S,T,track}
     first(track) ? Normal_kernel(x) : Zero()
