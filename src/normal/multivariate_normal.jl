@@ -1095,6 +1095,7 @@ end
         else
             push!(q.args, :(ptrUdiag = pointer(invdiagL); ptrUtri = ptrUtribase))
             push!(q.args, row_iter)
+            row_rem > 0 && push!(q.args, loop_increments)
         end
         if row_rem > 0 && n_row_reps > 0
             push!(q.args, :(ptrUdiag = pointer(invdiagL); ptrUtri = ptrUtribase))
@@ -1460,7 +1461,7 @@ end
 
 @noinline function track_mu_store(
     Mk::Int,Nk,T,μdim,μmy,W,Wshift,μstride,track_Y,μtransposed,
-    initialize::Bool=false,initμ::Bool=true,initY::Bool=true#,K = :K
+    initialize::Bool=false,initμ::Bool=true,initY::Bool=true,v∂stride::Int=W
 )::Expr
     size_T = sizeof(T)
     V = Vec{W,T}
@@ -1487,7 +1488,7 @@ end
         if μtransposed
             for c ∈ 0:(Nk-1)
                 mc = Symbol(:vμ_,c)
-                push!(row_iter.args, Expr(:(=), mc, :(vload($V, ptrv∂μ + $(c*W*size_T)))))
+                push!(row_iter.args, Expr(:(=), mc, :(vload($V, ptrv∂μ + $(c*v∂stride*size_T)))))
             end
             for m ∈ 0:Riterl
                 mask_this_iter = m == Riterl && Rrem > 0
@@ -1502,7 +1503,7 @@ end
             end
             for c ∈ 0:(Nk-1)
                 mc = Symbol(:vμ_,c)
-                push!(row_iter.args, :(vstore!(ptrv∂μ + $(c*W)*$size_T, $mc)))
+                push!(row_iter.args, :(vstore!(ptrv∂μ + $(c*v∂stride)*$size_T, $mc)))
             end
         else
             if initialize
@@ -1557,7 +1558,7 @@ end
 end
 @noinline function track_mu_store(
     Mk::Symbol,Nk,T,μdim,μmy,W,Wshift,μstride,track_Y,μtransposed,
-    initialize::Bool=false,initμ::Bool=true,initY::Bool=true#,K = :K
+    initialize::Bool=false,initμ::Bool=true,initY::Bool=true,v∂stride::Int=W
 )::Expr
     size_T = sizeof(T)
     V = Vec{W,T}
@@ -1575,7 +1576,7 @@ end
         if μtransposed
             for c ∈ 0:(Nk-1)
                 mc = Symbol(:vμ_,c)
-                push!(row_iter.args, Expr(:(=), mc, :(vload($V, ptrv∂μ + $(c*W*size_T)))))
+                push!(row_iter.args, Expr(:(=), mc, :(vload($V, ptrv∂μ + $(c*v∂stride*size_T)))))
             end
             for c ∈ 0:(Nk-1)
                 mc = Symbol(:vμ_,c)
@@ -1583,7 +1584,7 @@ end
             end
             for c ∈ 0:(Nk-1)
                 mc = Symbol(:vμ_,c)
-                push!(row_iter.args, :(vstore!(ptrv∂μ + $(c*W)*$size_T, $mc)))
+                push!(row_iter.args, :(vstore!(ptrv∂μ + $(c*v∂stride)*$size_T, $mc)))
             end
         else
             if initialize
@@ -1704,6 +1705,13 @@ function load_δ_expr(
     end
 end
 
+function calc_v∂strides(config::NormalCholeskyConfiguration{T}) where {T}
+    @unpack M, P = config
+    maxM = (M isa Symbol ? typemax(Int) : M)::Int
+    blockstructure = BlockingStructure(maxM, P, T)
+    blockstructure.W
+end
+
 @noinline function ∂mutlivariate_normal_SMLT_rowiter(
     config::NormalCholeskyConfiguration{T},
     Mk::Int, Nk::Int, col_rem::Int,
@@ -1789,6 +1797,7 @@ end
     ########################
     ### now time for ÷ L ###
     ########################
+    v∂strides = calc_v∂strides(config)
     init_reverse_pointers!(row_iter, config)
     store_Y = ∂Y_distinct_from_A(config)
     if col_rem > 0
@@ -1796,23 +1805,23 @@ end
             StructuredMatrices.A_rdiv_L_kernel_quote(
                 :row_rem_final, col_rem, col_rem, T, Astride, Astride, false, true,
                 Bsym = :ptrA_rev, Asym = :ptrA_rev, Ltrisym = :ptrLtri, Ldiagsym = :ptrLdiag,
-                loadB = true, storeA = true, calc_product = track_L ? N : 0
+                loadB = true, storeA = true, calc_product = track_L ? N : 0, v∂Lstride = v∂strides
             )
         else
             StructuredMatrices.A_rdiv_L_kernel_quote(
                 Mk, col_rem, col_rem, T, Astride, Astride, false, true,
                 Bsym = :ptrA_rev, Asym = :ptrA_rev, Ltrisym = :ptrLtri, Ldiagsym = :ptrLdiag,
-                loadB = true, storeA = true, calc_product = track_L ? N : 0
+                loadB = true, storeA = true, calc_product = track_L ? N : 0, v∂Lstride = v∂strides
             )
         end
         fullcols = Nk * n_col_reps
         # handle following in A_rdiv_L_quote
         append!(row_iter.args, row_iter_rev.args)
         if maskrowiter
-            track_μ && push!(row_iter.args, track_mu_store(:row_rem_final,col_rem,T,μdim,μmy,W,Wshift,μstride,track_Y,μtransposed,true,initμ,initY))#, col_rem))
+            track_μ && push!(row_iter.args, track_mu_store(:row_rem_final,col_rem,T,μdim,μmy,W,Wshift,μstride,track_Y,μtransposed,true,initμ,initY,v∂strides))#, col_rem))
             store_Y && store_A_kernel!(row_iter, :row_rem_final, col_rem, initY, :ptr∂Y_rev, W, Wshift, T, Ystride, !μmy)#, col_rem)
         else
-            track_μ && push!(row_iter.args, track_mu_store(Mk,col_rem,T,μdim,μmy,W,Wshift,μstride,track_Y,μtransposed,true,initμ,initY))#, col_rem))
+            track_μ && push!(row_iter.args, track_mu_store(Mk,col_rem,T,μdim,μmy,W,Wshift,μstride,track_Y,μtransposed,true,initμ,initY,v∂strides))#, col_rem))
             store_Y && store_A_kernel!(row_iter, Mk, col_rem, initY, :ptr∂Y_rev, W, Wshift, T, Ystride, !μmy)#, col_rem)
         end
         push!(row_iter.args, loop_pointer_increments(config, Nk, col_rem, W, Astride))
@@ -1826,13 +1835,13 @@ end
             StructuredMatrices.A_rdiv_L_kernel_quote(
                 :row_rem_final, Nk, :K, T, Astride, Astride, false, true,
                 Bsym = :ptrA_rev, Asym = :ptrA_rev, Ltrisym = :ptrLtri, Ldiagsym = :ptrLdiag,
-                loadB = true, storeA = true, calc_product = track_L ? N : 0
+                loadB = true, storeA = true, calc_product = track_L ? N : 0, v∂Lstride = v∂strides
             )
         else
             StructuredMatrices.A_rdiv_L_kernel_quote(
                 Mk, Nk, :K, T, Astride, Astride, false, true,
                 Bsym = :ptrA_rev, Asym = :ptrA_rev, Ltrisym = :ptrLtri, Ldiagsym = :ptrLdiag,
-                loadB = true, storeA = true, calc_product = track_L ? N : 0
+                loadB = true, storeA = true, calc_product = track_L ? N : 0, v∂Lstride = v∂strides
             )
         end
         if col_rem == 0 && !μtransposed && track_μ && μdim == 1 # then we need to zero-initialize these rows before entering the loop
@@ -1848,10 +1857,10 @@ end
             end
         end
         if maskrowiter
-            track_μ && push!(iterquote.args, track_mu_store(:row_rem_final,Nk,T,μdim,μmy,W,Wshift,μstride,track_Y,μtransposed,false,initμ,initY))#, :K))
+            track_μ && push!(iterquote.args, track_mu_store(:row_rem_final,Nk,T,μdim,μmy,W,Wshift,μstride,track_Y,μtransposed,false,initμ,initY,v∂strides))#, :K))
             store_Y && store_A_kernel!(iterquote, :row_rem_final, Nk, initY, :ptr∂Y_rev, W, Wshift, T, Ystride, !μmy)#, :K)
         else
-            track_μ && push!(iterquote.args, track_mu_store(Mk,Nk,T,μdim,μmy,W,Wshift,μstride,track_Y,μtransposed,false,initμ,initY))#, :K))
+            track_μ && push!(iterquote.args, track_mu_store(Mk,Nk,T,μdim,μmy,W,Wshift,μstride,track_Y,μtransposed,false,initμ,initY,v∂strides))#, :K))
             store_Y && store_A_kernel!(iterquote, Mk, Nk, initY, :ptr∂Y_rev, W, Wshift, T, Ystride, !μmy)#, :K)
         end
         row_iter_rev_loop = quote
@@ -1869,21 +1878,21 @@ end
             StructuredMatrices.A_rdiv_L_kernel_quote(
                 :row_rem_final, Nk, N, T, Astride, Astride, false, true,
                 Bsym = :ptrA_rev, Asym = :ptrA_rev, Ltrisym = :ptrLtri, Ldiagsym = :ptrLdiag,
-                loadB = true, storeA = store_A, calc_product = track_L ? N : 0
+                loadB = true, storeA = store_A, calc_product = track_L ? N : 0, v∂Lstride = v∂strides
             )
         else
             StructuredMatrices.A_rdiv_L_kernel_quote(
                 Mk, Nk, N, T, Astride, Astride, false, true,
                 Bsym = :ptrA_rev, Asym = :ptrA_rev, Ltrisym = :ptrLtri, Ldiagsym = :ptrLdiag,
-                loadB = true, storeA = store_A, calc_product = track_L ? N : 0
+                loadB = true, storeA = store_A, calc_product = track_L ? N : 0, v∂Lstride = v∂strides
             )
         end
         push!(row_iter.args, row_iter_rev_single)
         if maskrowiter
-            track_μ && push!(row_iter.args, track_mu_store(:row_rem_final,Nk,T,μdim,μmy,W,Wshift,μstride,track_Y,μtransposed,col_rem == 0,initμ,initY))#, N))
+            track_μ && push!(row_iter.args, track_mu_store(:row_rem_final,Nk,T,μdim,μmy,W,Wshift,μstride,track_Y,μtransposed,col_rem == 0,initμ,initY,v∂strides))#, N))
             store_Y && store_A_kernel!(row_iter, :row_rem_final, Nk, initY, :ptr∂Y_rev, W, Wshift, T, Ystride, !μmy)#, N)
         else
-            track_μ && push!(row_iter.args, track_mu_store(Mk,Nk,T,μdim,μmy,W,Wshift,μstride,track_Y,μtransposed,col_rem == 0,initμ,initY))#, N))
+            track_μ && push!(row_iter.args, track_mu_store(Mk,Nk,T,μdim,μmy,W,Wshift,μstride,track_Y,μtransposed,col_rem == 0,initμ,initY,v∂strides))#, N))
             store_Y && store_A_kernel!(row_iter, Mk, Nk, initY, :ptr∂Y_rev, W, Wshift, T, Ystride, !μmy)#, N)
         end
     end
@@ -2513,6 +2522,7 @@ end
         else
             push!(q.args, :(ptrUdiag = pointer(invdiagL); ptrUtri = ptrUtribase))
             push!(q.args, row_iter)
+            row_rem > 0 && push!(q.args, row_increments)
         end
         if row_rem > 0 && n_row_reps > 0
             push!(q.args, :(ptrUdiag = pointer(invdiagL); ptrUtri = ptrUtribase))
