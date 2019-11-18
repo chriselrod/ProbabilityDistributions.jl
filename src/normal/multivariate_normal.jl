@@ -853,6 +853,30 @@ end
     end
     q
 end
+function load_δ_expr(
+    config::NormalCholeskyConfiguration{T}, Mk, Nk, K, μsym, μmy, maskrowiter
+) where {T}
+    @unpack Ystride, Xstride, βstride, βdim, XP, μstride, μdim, μtransposed = config
+    if XP > 0
+        if maskrowiter
+            loadδfnmadd_quote(
+                :row_rem_final, Nk, K, T, Ystride, Xstride, βstride, βdim,
+                :ptrY, :ptrX, :ptrβ, :ptrμ, true, μmy, XP, μstride, μdim, μtransposed
+            )
+        else
+            loadδfnmadd_quote(
+                Mk,             Nk, K, T, Ystride, Xstride, βstride, βdim,
+                :ptrY, :ptrX, :ptrβ, :ptrμ, true, μmy, XP, μstride, μdim, μtransposed
+            )
+        end
+    else
+        if maskrowiter
+            loadδ_quote(:row_rem_final, Nk, K, T, Ystride, :ptrY, μdim, μstride, μsym, true, μmy, μtransposed)
+        else
+            loadδ_quote(Mk,             Nk, K, T, Ystride, :ptrY, μdim, μstride, μsym, true, μmy, μtransposed)
+        end
+    end
+end
 @noinline function Xβ_load_quote(
     R::Int, T::DataType, Xstride::Union{Int,Symbol}, βstride::Int, μmy::Bool = true, XP::Int = -1, 
     xsym::Symbol = :ptrX, βsym::Symbol = :ptrβ, maskload::Bool = true
@@ -953,18 +977,21 @@ end
     else
         quote end
     end
+    AdivUconfig = StructuredMatrices.A_rdiv_U_config{T}()
+    AdivUconfig.R = maskrowiter ? :row_rem_final : Mk
+    AdivUconfig.C = col_rem
+    AdivUconfig.K = 0
+    @pack! AdivUconfig = Astride
+    AdivUconfig.Bstride = Ystride
+    AdivUconfig.Ustride = N
+    AdivUconfig.isL′ = true
+    AdivUconfig.invdiagptr = true
+    AdivUconfig.storeA = n_col_reps > 0
+    AdivUconfig.loadB = false
+    AdivUconfig.reduce_sym = :δ²
     if col_rem > 0# col_rem > 0 may be the failpoint??? TODO try different row_rem to try and isolate failure
         loadδ_expr = load_δ_expr(config, Mk, col_rem, 0, μsym, true, maskrowiter)
-        iter_quote = if maskrowiter
-            StructuredMatrices.A_rdiv_U_kernel_quote(
-                :row_rem_final, col_rem, 0, T, Astride, Ystride, N, true, true, storeA = n_col_reps > 0, loadB = false, reduce_sym = :δ²
-            )
-        else
-            StructuredMatrices.A_rdiv_U_kernel_quote(
-                Mk, col_rem, 0, T, Astride, Ystride, N, true, true, storeA = n_col_reps > 0, loadB = false, reduce_sym = :δ²
-            )
-        end
-        #pushfirst!(row_iter.args, :(ptrUtri = ptrUtribase))
+        iter_quote = StructuredMatrices.A_rdiv_U_kernel_quote( AdivUconfig )
         push!(row_iter.args, loadδ_expr)
         push!(row_iter.args, iter_quote)
         push!(row_iter.args, :(ptrUdiag += $(col_rem*size_T)))
@@ -974,15 +1001,10 @@ end
     end
     if n_col_reps > 1
         loadδ_expr = load_δ_expr(config, Mk, Nk, :K, μsym, true, maskrowiter)
-        iterquote = if maskrowiter
-            StructuredMatrices.A_rdiv_U_kernel_quote(
-                :row_rem_final, Nk, :K, T, Astride, Ystride, N, true, true, storeA = true, loadB = false, reduce_sym = :δ²
-            )
-        else
-            StructuredMatrices.A_rdiv_U_kernel_quote(
-                Mk, Nk, :K, T, Astride, Ystride, N, true, true, storeA = true, loadB = false, reduce_sym = :δ²
-            )
-        end
+        AdivUconfig.C = Nk
+        AdivUconfig.K = :K
+        AdivUconfig.storeA = true
+        iterquote = StructuredMatrices.A_rdiv_U_kernel_quote( AdivUconfig )
         row_iter_loop = quote
             K = $base_K
             for crep ∈ 0:$(n_col_reps-1)
@@ -998,15 +1020,10 @@ end
         push!(row_iter.args, :(ptrUtri = ptrUtribase + $col_rem*$size_T)) # not sure if this is correct. Bug somewhere
         loadδ_expr = load_δ_expr(config, Mk, Nk, col_rem, μsym, true, maskrowiter)
         push!(row_iter.args, loadδ_expr)
-        row_iter_single = if maskrowiter
-            StructuredMatrices.A_rdiv_U_kernel_quote(
-                :row_rem_final, Nk, col_rem, T, Astride, Ystride, N, true, true, storeA = false, loadB = false, reduce_sym = :δ²
-            )
-        else
-            StructuredMatrices.A_rdiv_U_kernel_quote(
-                Mk, Nk, col_rem, T, Astride, Ystride, N, true, true, storeA = false, loadB = false, reduce_sym = :δ²
-            )
-        end
+        AdivUconfig.C = Nk
+        AdivUconfig.K = col_rem
+        AdivUconfig.storeA = false
+        row_iter_single = StructuredMatrices.A_rdiv_U_kernel_quote( AdivUconfig )
         push!(row_iter.args, row_iter_single)
     end
     row_iter
@@ -1680,30 +1697,6 @@ end
 end
 
 
-function load_δ_expr(
-    config::NormalCholeskyConfiguration{T}, Mk, Nk, K, μsym, μmy, maskrowiter
-) where {T}
-    @unpack Ystride, Xstride, βstride, βdim, XP, μstride, μdim, μtransposed = config
-    if XP > 0
-        if maskrowiter
-            loadδfnmadd_quote(
-                :row_rem_final, Nk, K, T, Ystride, Xstride, βstride, βdim,
-                :ptrY, :ptrX, :ptrβ, :ptrμ, true, μmy, XP, μstride, μdim, μtransposed
-            )
-        else
-            loadδfnmadd_quote(
-                Mk,             Nk, K, T, Ystride, Xstride, βstride, βdim,
-                :ptrY, :ptrX, :ptrβ, :ptrμ, true, μmy, XP, μstride, μdim, μtransposed
-            )
-        end
-    else
-        if maskrowiter
-            loadδ_quote(:row_rem_final, Nk, K, T, Ystride, :ptrY, μdim, μstride, μsym, true, μmy, μtransposed)
-        else
-            loadδ_quote(Mk,             Nk, K, T, Ystride, :ptrY, μdim, μstride, μsym, true, μmy, μtransposed)
-        end
-    end
-end
 
 function calc_v∂strides(config::NormalCholeskyConfiguration{T}) where {T}
     @unpack M, P = config
@@ -1742,13 +1735,21 @@ end
     else
         row_iter = quote end
     end
+    AdivUconfig = StructuredMatrices.A_rdiv_U_config{T}()
+    AdivUconfig.R = maskrowiter ? :row_rem_final : Mk
+    AdivUconfig.C = col_rem
+    AdivUconfig.K = 0
+    @pack! AdivUconfig = Astride
+    AdivUconfig.Bstride = Ystride
+    AdivUconfig.Ustride = N
+    AdivUconfig.isL′ = true
+    AdivUconfig.invdiagptr = true
+    AdivUconfig.storeA = true
+    AdivUconfig.loadB = false
+    AdivUconfig.reduce_sym = :δ²
     if col_rem > 0
         loadδ_expr = load_δ_expr(config, Mk, col_rem, 0, μsym, μmy, maskrowiter)
-        iter_quote = if maskrowiter
-            StructuredMatrices.A_rdiv_U_kernel_quote( :row_rem_final, col_rem, 0, T, Astride, Ystride, N, true, true, storeA = true, loadB = false, reduce_sym = :δ² )
-        else
-            StructuredMatrices.A_rdiv_U_kernel_quote( Mk, col_rem, 0, T, Astride, Ystride, N, true, true, storeA = true, loadB = false, reduce_sym = :δ² )
-        end
+        iter_quote = StructuredMatrices.A_rdiv_U_kernel_quote( AdivUconfig )
         #pushfirst!(row_iter.args, :(ptrUtri = ptrUtribase))
         push!(row_iter.args, loadδ_expr)
         push!(row_iter.args, iter_quote)
@@ -1759,15 +1760,9 @@ end
     end
     if n_col_reps > 1
         loadδ_expr = load_δ_expr(config, Mk, Nk, :K, μsym, μmy, maskrowiter)
-        iterquote = if maskrowiter
-            StructuredMatrices.A_rdiv_U_kernel_quote(
-                :row_rem_final, Nk, :K, T, Astride, Ystride, N, true, true, storeA = true, loadB = false, reduce_sym = :δ²
-            )
-        else
-            StructuredMatrices.A_rdiv_U_kernel_quote(
-                Mk, Nk, :K, T, Astride, Ystride, N, true, true, storeA = true, loadB = false, reduce_sym = :δ²
-            )
-        end
+        AdivUconfig.C = Nk
+        AdivUconfig.K = :K
+        iterquote = StructuredMatrices.A_rdiv_U_kernel_quote( AdivUconfig )
         row_iter_loop = quote
             K = $base_K
             for crep ∈ 0:$(n_col_reps-1)
@@ -1783,15 +1778,9 @@ end
         loadδ_expr = load_δ_expr(config, Mk, Nk, col_rem, μsym, μmy, maskrowiter)
         push!(row_iter.args, loadδ_expr)
         push!(row_iter.args, :(ptrUtri = ptrUtribase + $col_rem*$size_T))
-        row_iter_single = if maskrowiter
-            StructuredMatrices.A_rdiv_U_kernel_quote(
-                :row_rem_final, Nk, col_rem, T, Astride, Ystride, N, true, true, storeA = true, loadB = false, reduce_sym = :δ² # storeA = col_rem > 0
-            )
-        else
-            StructuredMatrices.A_rdiv_U_kernel_quote(
-                Mk, Nk, col_rem, T, Astride, Ystride, N, true, true, storeA = true, loadB = false, reduce_sym = :δ² # storeA = col_rem > 0
-            )
-        end
+        AdivUconfig.C = Nk
+        AdivUconfig.K = col_rem
+        row_iter_single = StructuredMatrices.A_rdiv_U_kernel_quote( AdivUconfig )
         push!(row_iter.args, row_iter_single)
     end
     ########################
@@ -1800,20 +1789,24 @@ end
     v∂strides = calc_v∂strides(config)
     init_reverse_pointers!(row_iter, config)
     store_Y = ∂Y_distinct_from_A(config)
+    AdivLconfig = StructuredMatrices.A_rdiv_L_config{T}()
+    AdivLconfig.R = maskrowiter ? :row_rem_final : Mk
+    AdivLconfig.C = col_rem
+    AdivLconfig.Kmax = col_rem
+    AdivLconfig.Astride = Astride
+    AdivLconfig.Bstride = Astride
+    AdivLconfig.isU′ = false
+    AdivLconfig.invdiagptr = true
+    AdivLconfig.Bsym = :ptrA_rev
+    AdivLconfig.Asym = :ptrA_rev
+    AdivLconfig.Ltrisym = :ptrLtri
+    AdivLconfig.Ldiagsym = :ptrLdiag
+    AdivLconfig.loadB = true
+    AdivLconfig.storeA = true
+    AdivLconfig.calc_product = track_L ? N : 0
+    AdivLconfig.v∂Lstride = v∂strides
     if col_rem > 0
-        row_iter_rev = if maskrowiter
-            StructuredMatrices.A_rdiv_L_kernel_quote(
-                :row_rem_final, col_rem, col_rem, T, Astride, Astride, false, true,
-                Bsym = :ptrA_rev, Asym = :ptrA_rev, Ltrisym = :ptrLtri, Ldiagsym = :ptrLdiag,
-                loadB = true, storeA = true, calc_product = track_L ? N : 0, v∂Lstride = v∂strides
-            )
-        else
-            StructuredMatrices.A_rdiv_L_kernel_quote(
-                Mk, col_rem, col_rem, T, Astride, Astride, false, true,
-                Bsym = :ptrA_rev, Asym = :ptrA_rev, Ltrisym = :ptrLtri, Ldiagsym = :ptrLdiag,
-                loadB = true, storeA = true, calc_product = track_L ? N : 0, v∂Lstride = v∂strides
-            )
-        end
+        row_iter_rev = StructuredMatrices.A_rdiv_L_kernel_quote( AdivLconfig )
         fullcols = Nk * n_col_reps
         # handle following in A_rdiv_L_quote
         append!(row_iter.args, row_iter_rev.args)
@@ -1831,19 +1824,9 @@ end
     end
     loop_ptr_increments = loop_pointer_increments(config, Nk, :K, W, Astride)
     if n_col_reps > 1
-        iterquote = if maskrowiter
-            StructuredMatrices.A_rdiv_L_kernel_quote(
-                :row_rem_final, Nk, :K, T, Astride, Astride, false, true,
-                Bsym = :ptrA_rev, Asym = :ptrA_rev, Ltrisym = :ptrLtri, Ldiagsym = :ptrLdiag,
-                loadB = true, storeA = true, calc_product = track_L ? N : 0, v∂Lstride = v∂strides
-            )
-        else
-            StructuredMatrices.A_rdiv_L_kernel_quote(
-                Mk, Nk, :K, T, Astride, Astride, false, true,
-                Bsym = :ptrA_rev, Asym = :ptrA_rev, Ltrisym = :ptrLtri, Ldiagsym = :ptrLdiag,
-                loadB = true, storeA = true, calc_product = track_L ? N : 0, v∂Lstride = v∂strides
-            )
-        end
+        AdivLconfig.C = Nk
+        AdivLconfig.Kmax = :K
+        iterquote = StructuredMatrices.A_rdiv_L_kernel_quote( AdivLconfig )
         if col_rem == 0 && !μtransposed && track_μ && μdim == 1 # then we need to zero-initialize these rows before entering the loop
             if maskrowiter
                 push!(row_iter.args, :(vstore!(ptr∂μ, vbroadcast($V, zero($T)), __mask__)))
@@ -1873,20 +1856,10 @@ end
         end
         push!(row_iter.args, row_iter_rev_loop)
     elseif n_col_reps == 1
-        store_A = track_Xβ || (track_fsμ && initμ) || (track_Y && initY)
-        row_iter_rev_single = if maskrowiter
-            StructuredMatrices.A_rdiv_L_kernel_quote(
-                :row_rem_final, Nk, N, T, Astride, Astride, false, true,
-                Bsym = :ptrA_rev, Asym = :ptrA_rev, Ltrisym = :ptrLtri, Ldiagsym = :ptrLdiag,
-                loadB = true, storeA = store_A, calc_product = track_L ? N : 0, v∂Lstride = v∂strides
-            )
-        else
-            StructuredMatrices.A_rdiv_L_kernel_quote(
-                Mk, Nk, N, T, Astride, Astride, false, true,
-                Bsym = :ptrA_rev, Asym = :ptrA_rev, Ltrisym = :ptrLtri, Ldiagsym = :ptrLdiag,
-                loadB = true, storeA = store_A, calc_product = track_L ? N : 0, v∂Lstride = v∂strides
-            )
-        end
+        AdivLconfig.storeA = track_Xβ || (track_fsμ && initμ) || (track_Y && initY)
+        AdivLconfig.C = Nk
+        AdivLconfig.Kmax = N
+        row_iter_rev_single = StructuredMatrices.A_rdiv_L_kernel_quote( AdivLconfig )
         push!(row_iter.args, row_iter_rev_single)
         if maskrowiter
             track_μ && push!(row_iter.args, track_mu_store(:row_rem_final,Nk,T,μdim,μmy,W,Wshift,μstride,track_Y,μtransposed,col_rem == 0,initμ,initY,v∂strides))#, N))

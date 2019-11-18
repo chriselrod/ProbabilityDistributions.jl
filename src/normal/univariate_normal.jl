@@ -3,12 +3,12 @@
 @inline logdet_coef(y::AbstractFixedSizeVector, ::Any, σ::AbstractFixedSizeVector) = One()
 
 function univariate_normal_quote(
-    M::Int, @nospecialize(T), yisvec::Bool,
+    M::Int, ::Type{T}, yisvec::Bool,
     @nospecialize(μisvec::Union{Bool,Nothing}), @nospecialize(σisvec::Union{Bool,Nothing}),
     (track_y, track_μ, track_σ)::NTuple{3,Bool},
     (inity, initμ, initσ)::NTuple{3,Bool},
     partial::Bool, calclogdet::Bool = false
-)
+) where {T}
     if M > 1
         pre_quote = quote
             qf = SIMDPirates.vbroadcast($(VectorizationBase.pick_vector(M,T)), zero($T))
