@@ -17,7 +17,11 @@ y ~ normal(μ, inv(chol(Σ)))
 This may be handled under the hood via how we represent Σ.
 
 """
-@noinline function distribution_diff_rule!(ivt::InitializedVarTracker, first_pass::Vector{Any}, tracked_vars, mod, out, A, f, verbose = false)
+@noinline function distribution_diff_rule!(
+    ivt::InitializedVarTracker, first_pass::Vector{Any},
+    tracked_vars::Set{Symbol}, mod::Symbol, out::Symbol,
+    A::Vector, f::Symbol, verbose::Bool = false
+)
     track_out = false
     function_call = Expr(:call, :($mod.ProbabilityDistributions.$(Symbol(:∂, f, :!))))
     for a ∈ A
@@ -83,7 +87,7 @@ push!(FMADD_DISTRIBUTIONS, :Bernoulli_logit)
 #
 # end
 
-function Bernoulli_logit_quote(T)
+function Bernoulli_logit_quote(::Type{T}) where {T}
     W = VectorizationBase.pick_vector_width(T)
     q = quote
         # $(Expr(:meta, :inline))
@@ -169,7 +173,7 @@ function ∂Bernoulli_logit(
 end
 push!(DISTRIBUTION_DIFF_RULES, :Bernoulli_logit)
 
-function Binomial_logit_quote(T, yconst::Bool = false)
+function Binomial_logit_quote(::Type{T}, yconst::Bool = false) where {T}
     W = VectorizationBase.pick_vector_width(T)
     q = quote
         # $(Expr(:meta, :inline))
@@ -236,7 +240,7 @@ function Binomial_logit_constant(
     Binomial_logit_constant(Val{(false,true,false)}(), s, α, N)
 end
 
-function ∂Binomial_logit_quote(T, nconst::Bool = false, initialized::Bool = false)
+function ∂Binomial_logit_quote(::Type{T}, nconst::Bool = false, initialized::Bool = false) where {T}
     W = VectorizationBase.pick_vector_width(T)
     ∂αop = initialized ? :(+=) : :(=)
     q = quote
@@ -610,10 +614,10 @@ end
 push!(DISTRIBUTION_DIFF_RULES, :LKJ)
 
 function gamma_quote(
-    M::Int, T, (yisvec, αisvec, βisvec)::NTuple{3,Bool},
+    M::Int, ::Type{T}, (yisvec, αisvec, βisvec)::NTuple{3,Bool},
     (track_y, track_α, track_β)::NTuple{3,Bool}, partial::Bool,
     (inity, initα, initβ)::NTuple{3,Bool} = (true,true,true)
-)
+) where {T}
     q = quote end
     pre_quote = quote end
     return_expr = quote end
@@ -947,7 +951,9 @@ end
 push!(DISTRIBUTION_DIFF_RULES, :Gamma)
 
 
-function beta_quote(M, T, (yisvec, αisvec, βisvec), (track_y, track_α, track_β), (inity, initα, initβ), partial)
+function beta_quote(
+    M::Int, ::Type{T}, (yisvec, αisvec, βisvec)::NTuple{3,Bool},
+    (track_y, track_α, track_β)::NTuple{3,Bool}, (inity, initα, initβ)::NTuple{3,Bool}, partial::Bool) where {T}
     q = quote end
     pre_quote = quote end
     return_expr = quote end

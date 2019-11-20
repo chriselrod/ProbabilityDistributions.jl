@@ -37,16 +37,6 @@ const STACK_POINTER_SUPPORTED_METHODS = Set{Symbol}()
 function __init__()
     @add_stackpointer_method ∂lsgg ∂Gamma ∂LKJ ∂Normal ∂Beta ∂Bernoulli_logit ∂Binomial_logit ∂EₘₐₓNMA
     @add_stackpointer_noalloc Normal ∂Normal!
-
-    if VERSION > v"1.3.0-rc1"
-        Threads.@spawn precompile(multivariate_normal_SMLT_quote, (NormalCholeskyConfiguration{Float64},))
-        Threads.@spawn precompile(∂multivariate_normal_SMLT_quote, (NormalCholeskyConfiguration{Float64},))
-        Threads.@spawn precompile(univariate_normal_quote, (Int,Float64,Bool,Bool,Bool,NTuple{3,Bool},NTuple{3,Bool},Bool,Bool))
-    else
-        precompile(multivariate_normal_SMLT_quote, (NormalCholeskyConfiguration{Float64},))
-        precompile(∂multivariate_normal_SMLT_quote, (NormalCholeskyConfiguration{Float64},))
-        precompile(univariate_normal_quote, (Int,Float64,Bool,Bool,Bool,NTuple{3,Bool},NTuple{3,Bool},Bool,Bool))
-    end
 end
 
 end # module
