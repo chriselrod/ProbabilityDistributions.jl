@@ -39,4 +39,7 @@ function __init__()
     @add_stackpointer_noalloc Normal ∂Normal!
 end
 
+include("precompile.jl")
+_precompile_()
+
 end # module
