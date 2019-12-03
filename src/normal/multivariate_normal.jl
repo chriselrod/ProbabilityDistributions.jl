@@ -365,11 +365,12 @@ end
 
 
 @noinline function loadδ_quote(
-    R::Int, C::Int, K::Union{Symbol,Int}, T::DataType,
-    Bstride::Union{Int,Symbol}, Bsym::Symbol,
-    μdim::Int, μstride::Union{Int,Symbol},
-    μsym::Union{Symbol,Nothing} = :μptr, maskload::Bool = true, μmy::Bool = true, μtransposed::Bool = false
-)
+    config::NormalCholeskyConfiguration{T},
+    R::Int, C::Int, K::Union{Symbol,Int}, Bsym::Symbol,
+    μsym::Union{Symbol,Nothing} = :μptr, maskload::Bool = true, μmy::Bool = true
+) where {T}
+    @unpack μdim, μstride, μtransposed, Ystride = config
+    Bstride = Ystride
     size_T = sizeof(T)
     W, Wshift = VectorizationBase.pick_vector_width_shift(R, T)
     V = Vec{W,T}
@@ -522,12 +523,13 @@ end
     q
 end
 @noinline function loadδ_quote(
-    R::Symbol, C::Int, K::Union{Symbol,Int}, T::DataType,
-    Bstride::Symbol, Bsym::Symbol,
-    μdim::Int, μstride::Union{Int,Symbol},
+    config::NormalCholeskyConfiguration{T},
+    R::Symbol, C::Int, K::Union{Symbol,Int}, Bsym::Symbol,
     μsym::Union{Symbol,Nothing} = :μptr, maskload::Bool = true,
-    μmy::Bool = true, μtransposed::Bool = false, masksym::Union{Unsigned,Symbol} = :__mask__
-)
+    μmy::Bool = true, masksym::Union{Unsigned,Symbol} = :__mask__
+) where {T}
+    @unpack μdim, μstride, μtransposed, Ystride = config
+    Bstride = Ystride
     size_T = sizeof(T)
     W, Wshift = VectorizationBase.pick_vector_width_shift(T)
     V = Vec{W,T}
@@ -583,12 +585,12 @@ end
     q
 end
 @noinline function loadδfnmadd_quote(
-    R::Int, C::Int, K::Union{Int,Symbol}, T::DataType,
-    Ystride::Union{Int,Symbol}, Xstride::Union{Int,Symbol}, βstride::Int, βdim::Int,
+    config::NormalCholeskyConfiguration{T},
+    R::Int, C::Int, K::Union{Int,Symbol},
     ysym::Symbol = :ptrY, xsym::Symbol = :ptrX, βsym::Symbol = :ptrβ, μsym::Symbol = :ptrμ,
-    maskload::Bool = true, μmy::Bool = true, XP::Int = -1,
-    μstride::Union{Int,Symbol} = -1, μdim::Int = -1, μtransposed::Bool = false
-)
+    maskload::Bool = true, μmy::Bool = true
+) where {T}
+    @unpack Ystride, βstride, Xstride, βdim, μdim, μstride, XP, μtransposed = config
     size_T = sizeof(T)
     W, Wshift = VectorizationBase.pick_vector_width_shift(R, T)
     V = Vec{W,T}
@@ -743,11 +745,12 @@ end
     q
 end
 @noinline function loadδfnmadd_quote(
-    R::Symbol, C::Int, K::Union{Symbol,Int}, T::DataType, Ystride::Symbol, Xstride::Symbol, βstride::Int, βdim::Int,
+    config::NormalCholeskyConfiguration{T},
+    R::Symbol, C::Int, K::Union{Int,Symbol},
     ysym::Symbol = :ptrY, xsym::Symbol = :ptrX, βsym::Symbol = :ptrβ, μsym::Symbol = :ptrμ,
-    maskload::Bool = true, μmy::Bool = true, XP::Int = -1,
-    μstride::Union{Int,Symbol} = -1, μdim::Int = -1, μtransposed::Bool = false, masksym::Union{Unsigned,Symbol} = :__mask__
-)
+    maskload::Bool = true, μmy::Bool = true, masksym::Union{Unsigned,Symbol} = :__mask__
+) where {T}
+    @unpack Ystride, βstride, Xstride, βdim, μdim, μstride, XP, μtransposed = config
     size_T = sizeof(T)
     W, Wshift = VectorizationBase.pick_vector_width_shift(T)
     V = Vec{W,T}
@@ -856,31 +859,32 @@ end
 function load_δ_expr(
     config::NormalCholeskyConfiguration{T}, Mk, Nk, K, μsym, μmy, maskrowiter
 ) where {T}
-    @unpack Ystride, Xstride, βstride, βdim, XP, μstride, μdim, μtransposed = config
+    @unpack XP = config
     if XP > 0
         if maskrowiter
             loadδfnmadd_quote(
-                :row_rem_final, Nk, K, T, Ystride, Xstride, βstride, βdim,
-                :ptrY, :ptrX, :ptrβ, :ptrμ, true, μmy, XP, μstride, μdim, μtransposed
+                config, :row_rem_final, Nk, K,
+                :ptrY, :ptrX, :ptrβ, μsym, true, μmy
             )
         else
             loadδfnmadd_quote(
-                Mk,             Nk, K, T, Ystride, Xstride, βstride, βdim,
-                :ptrY, :ptrX, :ptrβ, :ptrμ, true, μmy, XP, μstride, μdim, μtransposed
+                config, Mk,             Nk, K,
+                :ptrY, :ptrX, :ptrβ, μsym, true, μmy
             )
         end
     else
         if maskrowiter
-            loadδ_quote(:row_rem_final, Nk, K, T, Ystride, :ptrY, μdim, μstride, μsym, true, μmy, μtransposed)
+            loadδ_quote(config, :row_rem_final, Nk, K, :ptrY, μsym, true, μmy)
         else
-            loadδ_quote(Mk,             Nk, K, T, Ystride, :ptrY, μdim, μstride, μsym, true, μmy, μtransposed)
+            loadδ_quote(config, Mk,             Nk, K, :ptrY, μsym, true, μmy)
         end
     end
 end
 @noinline function Xβ_load_quote(
-    R::Int, T::DataType, Xstride::Union{Int,Symbol}, βstride::Int, μmy::Bool = true, XP::Int = -1, 
-    xsym::Symbol = :ptrX, βsym::Symbol = :ptrβ, maskload::Bool = true
-)
+    config::NormalCholeskyConfiguration{T},
+    R::Int, μmy::Bool = true, xsym::Symbol = :ptrX, βsym::Symbol = :ptrβ, maskload::Bool = true
+) where {T}
+    @unpack Xstride, βstride, XP = config
     size_T = sizeof(T)
     W, Wshift = VectorizationBase.pick_vector_width_shift(R, T)
     V = Vec{W,T}
@@ -928,9 +932,10 @@ end
 end
 # The symbol version assumes R < W (the SIMD width)
 @noinline function Xβ_load_quote(
-    R::Symbol, T::DataType, Xstride::Symbol, βstride::Int, μmy::Bool = true, XP::Int = -1, 
-    xsym::Symbol = :ptrX, βsym::Symbol = :ptrβ, maskload::Bool = true, masksym::Union{Unsigned,Symbol} = :__mask__
-)
+    config::NormalCholeskyConfiguration{T},
+    R::Symbol, μmy::Bool = true, xsym::Symbol = :ptrX, βsym::Symbol = :ptrβ, maskload::Bool = true, masksym::Union{Unsigned,Symbol} = :__mask__
+) where {T}
+    @unpack Xstride, βstride, XP = config
     size_T = sizeof(T)
     W, Wshift = VectorizationBase.pick_vector_width_shift(T)
     V = Vec{W,T}
@@ -970,9 +975,9 @@ end
     end
     row_iter = if (βdim == 1 && XP > 0)
         if maskrowiter
-            Xβ_load_quote(:row_rem_final, T, Xstride, βstride, false, XP, :ptrX, :ptrβ)
+            Xβ_load_quote(config, :row_rem_final, false, :ptrX, :ptrβ)
         else
-            Xβ_load_quote(Mk, T, Xstride, βstride, false, XP, :ptrX, :ptrβ)
+            Xβ_load_quote(config, Mk, false, :ptrX, :ptrβ)
         end
     else
         quote end
@@ -1477,16 +1482,18 @@ end
 end
 
 @noinline function track_mu_store(
-    Mk::Int,Nk,T,μdim,μmy,W,Wshift,μstride,track_Y,μtransposed,
+    config::NormalCholeskyConfiguration{T},
+    Mk::Int,Nk::Int,μmy::Bool,W::Int,Wshift::Int,
     initialize::Bool=false,initμ::Bool=true,initY::Bool=true,v∂stride::Int=W
-)::Expr
+) where {T}
+    @unpack track_Y, μstride, μdim, μtransposed = config
     size_T = sizeof(T)
     V = Vec{W,T}
     Riter = Mk >>> Wshift
     Rrem = Mk & (W-1)
     Riterl = Rrem > 0 ? Riter : Riter-1
     mask = VectorizationBase.mask(T, Rrem)
-    row_iter = quote end
+    row_iter::Expr = quote end
     f = μmy ? :vsub : :vadd
     if μdim == 0
         iter = 0
@@ -1574,12 +1581,14 @@ end
     row_iter
 end
 @noinline function track_mu_store(
-    Mk::Symbol,Nk,T,μdim,μmy,W,Wshift,μstride,track_Y,μtransposed,
+    config::NormalCholeskyConfiguration{T},
+    Mk::Symbol,Nk::Int,μmy::Bool,W::Int,Wshift::Int,
     initialize::Bool=false,initμ::Bool=true,initY::Bool=true,v∂stride::Int=W
-)::Expr
+) where {T}
+    @unpack track_Y, μstride, μdim, μtransposed = config
     size_T = sizeof(T)
     V = Vec{W,T}
-    row_iter = quote end
+    row_iter::Expr = quote end
     f = μmy ? :vsub : :vadd
     if μdim == 0
         iter = 0
@@ -1728,9 +1737,9 @@ end
     size_T = sizeof(T)
     if βdim == 1 && XP > 0
         if maskrowiter
-            row_iter = Xβ_load_quote(:row_rem_final, T, Xstride, βstride, μmy, XP, :ptrX, :ptrβ)
+            row_iter = Xβ_load_quote(config, :row_rem_final, μmy, :ptrX, :ptrβ)
         else
-            row_iter = Xβ_load_quote(Mk, T, Xstride, βstride, μmy, XP, :ptrX, :ptrβ)
+            row_iter = Xβ_load_quote(config, Mk, μmy, :ptrX, :ptrβ)
         end
     else
         row_iter = quote end
@@ -1811,10 +1820,10 @@ end
         # handle following in A_rdiv_L_quote
         append!(row_iter.args, row_iter_rev.args)
         if maskrowiter
-            track_μ && push!(row_iter.args, track_mu_store(:row_rem_final,col_rem,T,μdim,μmy,W,Wshift,μstride,track_Y,μtransposed,true,initμ,initY,v∂strides))#, col_rem))
+            track_μ && push!(row_iter.args, track_mu_store(config,:row_rem_final,col_rem,μmy,W,Wshift,true,initμ,initY,v∂strides))#, col_rem))
             store_Y && store_A_kernel!(row_iter, :row_rem_final, col_rem, initY, :ptr∂Y_rev, W, Wshift, T, Ystride, !μmy)#, col_rem)
         else
-            track_μ && push!(row_iter.args, track_mu_store(Mk,col_rem,T,μdim,μmy,W,Wshift,μstride,track_Y,μtransposed,true,initμ,initY,v∂strides))#, col_rem))
+            track_μ && push!(row_iter.args, track_mu_store(config,Mk,col_rem,μmy,W,Wshift,true,initμ,initY,v∂strides))#, col_rem))
             store_Y && store_A_kernel!(row_iter, Mk, col_rem, initY, :ptr∂Y_rev, W, Wshift, T, Ystride, !μmy)#, col_rem)
         end
         push!(row_iter.args, loop_pointer_increments(config, Nk, col_rem, W, Astride))
@@ -1840,10 +1849,10 @@ end
             end
         end
         if maskrowiter
-            track_μ && push!(iterquote.args, track_mu_store(:row_rem_final,Nk,T,μdim,μmy,W,Wshift,μstride,track_Y,μtransposed,false,initμ,initY,v∂strides))#, :K))
+            track_μ && push!(iterquote.args, track_mu_store(config,:row_rem_final,Nk,μmy,W,Wshift,false,initμ,initY,v∂strides))#, :K))
             store_Y && store_A_kernel!(iterquote, :row_rem_final, Nk, initY, :ptr∂Y_rev, W, Wshift, T, Ystride, !μmy)#, :K)
         else
-            track_μ && push!(iterquote.args, track_mu_store(Mk,Nk,T,μdim,μmy,W,Wshift,μstride,track_Y,μtransposed,false,initμ,initY,v∂strides))#, :K))
+            track_μ && push!(iterquote.args, track_mu_store(config,Mk,Nk,μmy,W,Wshift,false,initμ,initY,v∂strides))#, :K))
             store_Y && store_A_kernel!(iterquote, Mk, Nk, initY, :ptr∂Y_rev, W, Wshift, T, Ystride, !μmy)#, :K)
         end
         row_iter_rev_loop = quote
@@ -1862,10 +1871,10 @@ end
         row_iter_rev_single = StructuredMatrices.A_rdiv_L_kernel_quote( AdivLconfig )
         push!(row_iter.args, row_iter_rev_single)
         if maskrowiter
-            track_μ && push!(row_iter.args, track_mu_store(:row_rem_final,Nk,T,μdim,μmy,W,Wshift,μstride,track_Y,μtransposed,col_rem == 0,initμ,initY,v∂strides))#, N))
+            track_μ && push!(row_iter.args, track_mu_store(config,:row_rem_final,Nk,μmy,W,Wshift,col_rem == 0,initμ,initY,v∂strides))#, N))
             store_Y && store_A_kernel!(row_iter, :row_rem_final, Nk, initY, :ptr∂Y_rev, W, Wshift, T, Ystride, !μmy)#, N)
         else
-            track_μ && push!(row_iter.args, track_mu_store(Mk,Nk,T,μdim,μmy,W,Wshift,μstride,track_Y,μtransposed,col_rem == 0,initμ,initY,v∂strides))#, N))
+            track_μ && push!(row_iter.args, track_mu_store(config,Mk,Nk,μmy,W,Wshift,col_rem == 0,initμ,initY,v∂strides))#, N))
             store_Y && store_A_kernel!(row_iter, Mk, Nk, initY, :ptr∂Y_rev, W, Wshift, T, Ystride, !μmy)#, N)
         end
     end
