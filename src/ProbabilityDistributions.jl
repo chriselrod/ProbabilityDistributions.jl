@@ -33,13 +33,16 @@ include("normal/multivariate_normal.jl")
 const STACK_POINTER_SUPPORTED_METHODS = Set{Symbol}()
 @def_stackpointer_fallback ∂lsgg ∂Gamma ∂LKJ ∂Normal ∂Beta ∂Bernoulli_logit ∂Binomial_logit #∂EₘₐₓNMA
 @def_stackpointer_noalloc Normal ∂Normal!
+include("precompile.jl")
+_precompile_()
 
 function __init__()
     @add_stackpointer_method ∂lsgg ∂Gamma ∂LKJ ∂Normal ∂Beta ∂Bernoulli_logit ∂Binomial_logit ∂EₘₐₓNMA
     @add_stackpointer_noalloc Normal ∂Normal!
+    _precompile_()
 end
 
-include("precompile.jl")
-_precompile_()
+
+
 
 end # module
