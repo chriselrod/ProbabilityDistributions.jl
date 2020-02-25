@@ -1,91 +1,9 @@
 
-
-const DISTRIBUTION_DIFF_RULES = Set{Symbol}()
+import PaddedMatrices: logdensity, ∂logdensity!
 
 using ReverseDiffExpressionsBase: adj, InitializedVarTracker, initialize!
 
-"""
-Do we inline the expression, or try and take advantage of multiple dispatch?
-The latter option sounds more appealing flexible, and easier to test.
-Constants will be dropped based on their type.
-
-The normal distribution has 3 arguments, dispatching to either:
-y ~ normal(μ = 0, σ = 1) # default arguments
-or
-y ~ normal(μ, inv(chol(Σ)))
-
-This may be handled under the hood via how we represent Σ.
-
-"""
-@noinline function distribution_diff_rule!(
-    ivt::InitializedVarTracker, first_pass::Vector{Any},
-    tracked_vars::Set{Symbol}, mod::Symbol, out::Symbol,
-    A::Vector, f::Symbol, verbose::Bool = false
-)
-    track_out = false
-    function_call = Expr(:call, :($mod.ProbabilityDistributions.$(Symbol(:∂, f, :!))))
-    for a ∈ A
-        if a ∈ tracked_vars
-            track_out = true
-            adja = adj(a)
-            if initialize!(ivt, first_pass, adja, adja, mod) # must_initialize
-                push!(function_call.args, :($mod.uninitialized($adja)))
-            else
-                push!(function_call.args, adja)
-            end
-        else
-            push!(function_call.args, nothing)
-        end
-    end
-    append!(function_call.args, A)
-    if track_out
-        if verbose
-            printstring = "distribution $f (ret: $out): "
-            push!(first_pass, :(println($printstring)))
-        end
-        push!(first_pass, Expr(:(=), out, function_call))
-        if verbose
-            push!(first_pass, :(@show $out))
-            for a ∈ A
-                a ∈ tracked_vars && push!(first_pass, :(@show $(adj(a))))
-            end
-        end
-    end
-    nothing
-end
-# """
-# Arguments are: y, logitθ
-# """
-# function ∂Bernoulli_logit_quote(y_is_param, logitθ_is_param)
-#     @assert y_is_param == false
-#
-#     out = zero(eltype(p))
-#     @inbounds @simd for i ∈ eachindex(y,p)
-#         OmP = 1 - p[i]
-#         out += y[i] ? p[i] : OmP
-#     end
-#     out
-# end
-const FMADD_DISTRIBUTIONS = Set{Symbol}()
-push!(FMADD_DISTRIBUTIONS, :Bernoulli_logit)
-
-# """
-# Arguments are: y, logitθ
-# """
-# function ∂Bernoulli_logit_quote(y_is_param, β_is_param, X_is_param, α_is_param)
-#     @assert y_is_param == false
-#     quote
-#         T = promote_type(eltype(α, X, β))
-#         target = zero(T)
-#         @fastmath @inbounds @simd ivdep for i ∈ eachindex(y)
-#             OmP = one(T) / (one(T) + SLEEFPirates.exp( α + β[i] * x[i]  ))
-#             P = one(T) - P
-#             target += y[i] ? P : OmP
-#         end
-#         target
-#     end
-#
-# end
+struct Bernoulli{T} end
 
 function Bernoulli_logit_quote(::Type{T}) where {T}
     W = VectorizationBase.pick_vector_width(T)
@@ -104,17 +22,14 @@ function Bernoulli_logit_quote(::Type{T}) where {T}
     simplify_expr(q)
 end
 
-@generated function Bernoulli_logit(
-    ::Val{track},
-    y::BitVector, α::AbstractVector{T}
-) where {T, track}
+@generated function logdensity(::Bernoulli{(false,true)}, y::BitVector, α::AbstractVector{T}) where {T}
     y_is_param, α_is_param = track
     @assert y_is_param == false
     Bernoulli_logit_quote(T)
 end
-function Bernoulli_logit_constant(y::BitVector, α::AbstractVector{T}, ::Val{track} = Val{(false,true)}()) where {T,track}
-    zero(T)
-end
+logdensity(::Bernoulli{(false,false)}, y::BitVector, α::AbstractVector{T}) where {T} = zero(T)
+constant(::Bernoulli, y::BitVector, α::AbstractVector{T}) where {T} = zero(T)
+
 
 function ∂Bernoulli_logit_quote(T, initialized::Bool = false)
     W = VectorizationBase.pick_vector_width(T)
@@ -136,42 +51,10 @@ function ∂Bernoulli_logit_quote(T, initialized::Bool = false)
     simplify_expr(q)
 end
 
-@generated function ∂Bernoulli_logit!(
-    ::Nothing, ∂α::AbstractVector{T}, y::BitVector, α::AbstractVector{T}
-) where {T}
+@generated function ∂logdensity!(::Nothing, ∂α::AbstractVector{T}, ::Bernoulli{(false,true)}, y::BitVector, α::AbstractVector{T}) where {T}
     ∂Bernoulli_logit_quote(T, isinitialized(∂α))
 end
 
-function ∂Bernoulli_logit(y::BitVector, α::AbstractVector{T}, ::Val{track} = Val{(false,true)}()) where {T,track}
-    y_is_param, α_is_param = track
-    @assert y_is_param == false
-    if α_is_param
-        ∂α = similar(α)
-        return ∂Bernoulli_logit!(∂α, y, α), ∂α
-    else
-        return Bernoulli_logit(y, α)
-    end
-end
-
-function ∂Bernoulli_logit(
-    sptr::StackPointer, ::Val{track},# = Val{(false,true)}(),
-    y::BitVector, α::AbstractVector{T}
-) where {T,track}
-    y_is_param, α_is_param = track
-    @assert y_is_param == false
-    if α_is_param
-        sptr, ∂α = similar(sptr, α)
-        return sptr, (∂Bernoulli_logit!(∂α, y, α), ∂α)
-    else
-        return sptr, Bernoulli_logit(y, α)
-    end
-end
-function ∂Bernoulli_logit(
-        sptr::StackPointer, y::BitVector, α::AbstractVector{T}
-) where {T}
-    ∂Bernoulli_logit(sptr, Val{(false,true)}(), y, α)
-end
-push!(DISTRIBUTION_DIFF_RULES, :Bernoulli_logit)
 
 function Binomial_logit_quote(::Type{T}, yconst::Bool = false) where {T}
     W = VectorizationBase.pick_vector_width(T)
