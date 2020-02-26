@@ -9,7 +9,7 @@ function logdensity(::Bernoulli{(false,true)}, y::BitVector, α::AbstractVector{
     t = vzero()
     @avx for i ∈ eachindex(α)
         αᵢ = α[i]
-        invOmP = 1 - exp(αᵢ)
+        invOmP = 1 + exp(αᵢ)
         nlogOmp = log(invOmP)
         nlogP = nlogOmp - αᵢ
         t -= y[i] ? nlogP : nlogOmP
