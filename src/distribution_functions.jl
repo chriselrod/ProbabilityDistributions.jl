@@ -5,27 +5,16 @@ using ReverseDiffExpressionsBase: adj, InitializedVarTracker, initialize!
 
 struct Bernoulli{T} end
 
-function Bernoulli_logit_quote(::Type{T}) where {T}
-    W = VectorizationBase.pick_vector_width(T)
-    q = quote
-        # $(Expr(:meta, :inline))
-        target = vbroadcast(Vec{$W,$T}, zero($T))
-        @vvectorize $T for i ∈ eachindex(y)
-            αᵢ = α[i]
-            invOmP = one($T) + SLEEFPirates.exp( αᵢ )
-            nlogOmP = log(invOmP)
-            nlogP = nlogOmP - αᵢ
-            target = vsub(target, y[i] ? nlogP : nlogOmP)
-        end
-        target
+function logdensity(::Bernoulli{(false,true)}, y::BitVector, α::AbstractVector{T}) where {T}
+    t = vzero()
+    @avx for i ∈ eachindex(α)
+        αᵢ = α[i]
+        invOmP = 1 - exp(αᵢ)
+        nlogOmp = log(invOmP)
+        nlogP = nlogOmp - αᵢ
+        t -= y[i] ? nlogP : nlogOmP
     end
-    simplify_expr(q)
-end
-
-@generated function logdensity(::Bernoulli{(false,true)}, y::BitVector, α::AbstractVector{T}) where {T}
-    y_is_param, α_is_param = track
-    @assert y_is_param == false
-    Bernoulli_logit_quote(T)
+    t
 end
 logdensity(::Bernoulli{(false,false)}, y::BitVector, α::AbstractVector{T}) where {T} = zero(T)
 constant(::Bernoulli, y::BitVector, α::AbstractVector{T}) where {T} = zero(T)
