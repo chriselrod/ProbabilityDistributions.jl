@@ -3,9 +3,9 @@ import PaddedMatrices: logdensity, ∂logdensity!
 
 using ReverseDiffExpressionsBase: adj, InitializedVarTracker, initialize!
 
-struct Bernoulli{T} end
+struct BernoulliLogit{T} end
 
-function logdensity(::Bernoulli{(false,true)}, y::BitVector, α::AbstractVector{T}) where {T}
+function logdensity(::BernoulliLogit{(false,true)}, y::BitVector, α::AbstractVector)
     t = vzero()
     @avx for i ∈ eachindex(α)
         αᵢ = α[i]
@@ -14,80 +14,45 @@ function logdensity(::Bernoulli{(false,true)}, y::BitVector, α::AbstractVector{
         nlogP = nlogOmp - αᵢ
         t -= y[i] ? nlogP : nlogOmP
     end
-    t
+    extract_data(t)
 end
-logdensity(::Bernoulli{(false,false)}, y::BitVector, α::AbstractVector{T}) where {T} = zero(T)
-constant(::Bernoulli, y::BitVector, α::AbstractVector{T}) where {T} = zero(T)
+logdensity(::BernoulliLogit{(false,false)}, y::BitVector, α::AbstractVector{T}) where {T} = zero(T)
+constant(::BernoulliLogit, y::BitVector, α::AbstractVector{T}) where {T} = zero(T)
 
 
-function ∂Bernoulli_logit_quote(T, initialized::Bool = false)
-    W = VectorizationBase.pick_vector_width(T)
-    ∂αop = initialized ? :(+=) : :(=)
-    q = quote
-        # $(Expr(:meta, :inline))
-        target = vbroadcast(Vec{$W,$T}, zero($T))
-        @vvectorize $T for i ∈ eachindex(y)
-            αᵢ = α[i]
-            invOmP = (one($T) + SLEEFPirates.exp( αᵢ ))
-            ∂logP = one($T) / invOmP
-            nlogOmP = SLEEFPirates.log(invOmP)
-            nlogP = nlogOmP - αᵢ
-            target = vsub(target, y[i] ? nlogP : nlogOmP)
-            $(Expr(∂αop, :(∂α[i]), :(y[i] ? ∂logP : ∂logP - one($T))))
-        end
-        target
+
+function ∂logdensity!(::Nothing, ∂α::AbstractVector, ::BernoulliLogit{(false,true)}, y::BitVector, α::AbstractVector)
+    t = vzero()
+    @avx for i ∈ eachindex(α)
+        αᵢ = α[i]
+        invOmP = 1 + exp(αᵢ)
+        ∂logP = 1 / invOmP
+        nlogOmp = log(invOmP)
+        nlogP = nlogOmp - αᵢ
+        t -= y[i] ? nlogP : nlogOmP
+        ∂α[i] += y[i] ? ∂logP : ∂logP - 1
     end
-    simplify_expr(q)
+    extract_data(t)
 end
 
-@generated function ∂logdensity!(::Nothing, ∂α::AbstractVector{T}, ::Bernoulli{(false,true)}, y::BitVector, α::AbstractVector{T}) where {T}
-    ∂Bernoulli_logit_quote(T, isinitialized(∂α))
-end
+struct BinomialLogit{T} end
 
-
-function Binomial_logit_quote(::Type{T}, yconst::Bool = false) where {T}
-    W = VectorizationBase.pick_vector_width(T)
-    q = quote
-        # $(Expr(:meta, :inline))
-        target = vbroadcast(Vec{$W,$T}, zero($T))
-        @vvectorize $T for i ∈ eachindex(s)
-            αᵢ = α[i]
-            invOmP = one($T) + SLEEFPirates.exp( αᵢ )
-            nlogOmP = log(invOmP)
-            target = vsub(target, $(yconst ? :N : :(N[i])) * nlogOmP - s[i] * αᵢ)
-        end
-        target
+function logdensity(::BinomialLogit{(false, true, false)}, y::AbstractVector, α::AbstractVector, N::AbstractVector)
+    t = target()
+    @avx for i ∈ eachindex(α)
+        αᵢ = α[i]
+        invOmP = 1 + exp( αᵢ )
+        nlogOmP = log(invOmP)
+        t -= N[i] * nlogOmP - y[i] * αᵢ
     end
-    simplify_expr(q)
+    extract_data(t)
 end
 
-@generated function Binomial_logit(
-    ::Val{track},
-    s::AbstractVector{T}, α::AbstractVector{T}, N::AbstractVector{T}    
-) where {track, T}
-    s_is_param, α_is_param, N_is_param = track
-    @assert !s_is_param && !N_is_param
-    Binomial_logit_quote(T)
-end
-
-@generated function Binomial_logit(
-    ::Val{track},
-    s::AbstractVector{T}, α::AbstractVector{T}, N::T
-) where {track, T}
-    s_is_param, α_is_param, N_is_param = track
-    @assert !s_is_param && !N_is_param
-    Binomial_logit_quote(T, true)
-end
-@generated function Binomial_logit(
-    s::AbstractVector{T}, α::AbstractVector{T}, N::Union{T,<: AbstractVector{T}}
-) where {track, T}
-    Binomial_logit(Val{(false,true,false)}(), s, α, N)
-end
 
 # faster, works for Floats that can't be convered to Int
 # lbinom(n, p) = lgamma(n+1) - lgamma(n-p+1) - lgamma(p+1) 
 # more accurate, but doesn't allow n or p to have decimals.
-lbinom(n, p) = first(logabsbinomial(trunc(Int,n), trunc(Int,p))) 
+lbinom(n, p) = first(logabsbinomial(trunc(Int,n), trunc(Int,p)))
 function Binomial_logit_constant(
     ::Val{track}, s::AbstractVector{T}, α::AbstractVector{T}, N::AbstractVector{T}
 ) where {track,T}
