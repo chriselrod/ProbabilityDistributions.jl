@@ -3,10 +3,10 @@ import PaddedMatrices: logdensity, ∂logdensity!
 
 using ReverseDiffExpressionsBase: adj, InitializedVarTracker, initialize!
 
-struct BernoulliLogit{T} end
+struct BernoulliLogit{T} <: AbstractProbabilityDistribution{T} end
 
 function logdensity(::BernoulliLogit{(false,true)}, y::BitVector, α::AbstractVector)
-    t = vzero()
+    t = target()
     @avx for i ∈ eachindex(α)
         αᵢ = α[i]
         invOmP = 1 + exp(αᵢ)
@@ -21,8 +21,8 @@ constant(::BernoulliLogit, y::BitVector, α::AbstractVector{T}) where {T} = zero
 
 
 
-function ∂logdensity!(::Nothing, ∂α::AbstractVector, ::BernoulliLogit{(false,true)}, y::BitVector, α::AbstractVector)
-    t = vzero()
+function ∂logdensity!(::Nothing, ∂α::AbstractVector, ::BernoulliLogit{(false,true)}, y::BitVector, α::AbstractVector{T}) where {T}
+    t = target()
     @avx for i ∈ eachindex(α)
         αᵢ = α[i]
         invOmP = 1 + exp(αᵢ)
@@ -30,12 +30,12 @@ function ∂logdensity!(::Nothing, ∂α::AbstractVector, ::BernoulliLogit{(fals
         nlogOmp = log(invOmP)
         nlogP = nlogOmp - αᵢ
         t -= y[i] ? nlogP : nlogOmP
-        ∂α[i] += y[i] ? ∂logP : ∂logP - 1
+        ∂α[i] += y[i] ? ∂logP : ∂logP - one(T)
     end
     extract_data(t)
 end
 
-struct BinomialLogit{T} end
+struct BinomialLogit{T} <: AbstractProbabilityDistribution{T} end
 
 function logdensity(::BinomialLogit{(false, true, false)}, y::AbstractVector, α::AbstractVector, N::AbstractVector)
     t = target()
@@ -77,108 +77,41 @@ function Binomial_logit_constant(
     Binomial_logit_constant(Val{(false,true,false)}(), s, α, N)
 end
 
-function ∂Binomial_logit_quote(::Type{T}, nconst::Bool = false, initialized::Bool = false) where {T}
-    W = VectorizationBase.pick_vector_width(T)
-    ∂αop = initialized ? :(+=) : :(=)
-    q = quote
-        # $(Expr(:meta, :inline))
-        target = vbroadcast(Vec{$W,$T}, zero($T))
-        @vvectorize $T for i ∈ eachindex(s)
-            αᵢ = α[i]
-            expαᵢ = SLEEFPirates.exp( αᵢ )
-            invOmP = ( one($T) + expαᵢ )
-            ∂logP = one($T) / invOmP
-            nlogOmP = SLEEFPirates.log(invOmP)
-            $(nconst ? :(sᵢ = s[i]) : :(sᵢ = s[i]; Nᵢ = N[i]))
-            target = vsub(target, Nᵢ * nlogOmP - sᵢ * αᵢ )
-            $(Expr(∂αop, :(∂α[i]), :(sᵢ - Nᵢ * ∂logP * expαᵢ)))
+function ∂logdensity!(::Nothing, ∂α::AbstractVector, ::Nothing, ::BernoulliLogit{(false,true,false)}, y::AbstractVector, α::AbstractVector{T}, N::AbstractVector) where {T}
+    t = target()
+    @avx for i ∈ eachindex(α)
+        αᵢ = α[i]
+        invOmP = 1 + exp(αᵢ)
+        ∂logP = 1 / invOmP
+        nlogOmp = log(invOmP)
+        nlogP = nlogOmp - αᵢ
+        t -= N[i] * nlogOmp - y[i] * αᵢ
+        ∂α[i] += y[i] + (N[i]) * (∂logP - one(T))
+    end
+    extract_data(t)
+end
+
+function logdensity(
+    ::BernoulliLogit, y::BitVector, X::AbstractMatrix{T}, β::AbstractVector{T}, α::AbstractFloat
+)
+    t = target()
+    for i ∈ 1:size(X,1)
+        a = α
+        for p ∈ 1:size(X,2)
+            a += X[i,p] * β[p]
         end
-        target
+        invOmP = 1 + exp(a)
+        nlogOmp = log(invOmP)
+        nlogP = nlogOmp - a
+        t -= y[i] ? nlogP : nlogOmP
     end
-    simplify_expr(q)
-end
-
-@generated function ∂Binomial_logit!(
-    ::Nothing, ∂α::∂Α, ::Nothing,
-    s::AbstractVector{T}, α::AbstractVector{T}, N::AbstractVector{T}
-) where {T, ∂Α <: AbstractVector{T}}
-    ∂Binomial_logit_quote(T, false, isinitialized(∂Α))
-end
-@generated function ∂Binomial_logit!(
-    ::Nothing, ∂α::∂Α, ::Nothing,
-    s::AbstractVector{T}, α::AbstractVector{T}, Nᵢ::T
-) where {T, ∂Α <: AbstractVector{T}}
-    ∂Binomial_logit_quote(T, true, isinitialized(∂Α))
-end
-
- #    ::Val{track} = Val{(false,true,false)}()
-function ∂Binomial_logit(
-    ::Val{track}, s::AbstractVector{T}, α::AbstractVector{T}, N::Union{T,AbstractVector{T}}
-) where {T,track}
-    s_is_param, α_is_param, N_is_param = track
-    @assert !s_is_param && !N_is_param
-    if α_is_param
-        ∂α = similar(α)
-        return ∂Binomial_logit!(∂α, s, uninitialized(α), N), ∂α
-    else
-        return Binomial_logit(s, α, N)
-    end
-end
-#::Val{track} = Val{(false,true,false)}()
-function ∂Binomial_logit(
-    sptr::StackPointer, ::Val{track}, s::AbstractVector{T}, α::AbstractVector{T}, N::Union{T,AbstractVector{T}}
-) where {T,track}
-    s_is_param, α_is_param, N_is_param = track
-    @assert !s_is_param && !N_is_param
-    if α_is_param
-        sptr, ∂α = similar(sptr, α)
-        return sptr, (∂Binomial_logit!(∂α, s, uninitialized(α), N), ∂α')
-    else
-        return sptr, Binomial_logit(s, α, N)
-    end
-end
-
-push!(DISTRIBUTION_DIFF_RULES, :Binomial_logit)
-
-#::Val{track} = Val{(false,false,true,true)}()
-@generated function Bernoulli_logit(
-    ::Val{track}, y::BitVector, X::AbstractMatrix{T}, β::AbstractVector{T}, α::AbstractFloat
-) where {T, track}
-    y_is_param, β_is_param, X_is_param, α_is_param = track
-    @assert y_is_param == false
-    if PaddedMatrices.is_sized(β)
-        N_β = PaddedMatrices.type_length(β)
-        q = quote
-            # $(Expr(:meta, :inline))
-            # T = promote_type(eltype(α),eltype(β),eltype(X))
-#            target = zero($T)
-            target = vbroadcast(Vec{$(VectorizationBase.pick_vector_width(T)),$T}, zero($T))
-            @vectorize $T for i ∈ eachindex(y)
-                # a = $(Expr(:call, :+, :α, [:(X[i,$n] * β[$n]) for n ∈ 1:N_β]...))
-                # Break it up, so inference still works for N_β > 15
-                a = vmuladd(X[i,1], β[1], α)
-                $([:(a = vmuladd(X[i,$n], β[$n], a)) for n ∈ 2:N_β]...)
-                OmP = one($T) / (one($T) + SLEEFPirates.exp( a ))
-                # P = one($T) - OmP
-                logOmP = log(OmP)
-                logP = a + logOmP
-                target = vadd(target, y[i] ? logP : logOmP)
-            end
-            target
-        end
-    else
-        throw("""
-            Dynamically sized coefficient vector β is not yet supported.
-            Feel free to file an issue, so that adding support will be prioritized.
-            As a workaround, use a β with type parameterized by size.
-            Eg, a padded vector from PaddedMatrices.jl or SVector from StaticArrays.jl.
-        """)
-    end
-    simplify_expr(q)
+    extract_data(t)
 end
 Bernoulli_logit_constant(y, X, β, α, ::Any) = zero(eltype(β))
-@generated function ∂Bernoulli_logit!(
-    ::Nothing, ::Nothing, ∂β::∂Β, ∂α::∂Α,
+
+
+@generated function ∂logdensity!(
+    ::Nothing, ::Nothing, ∂β::∂Β, ∂α::∂Α, ::BernoulliLogit,
     y::BitVector, X::AbstractMatrix{T}, β::AbstractVector{T}, α::AbstractFloat,
 ) where {T, ∂Β, ∂Α}
     β_is_param = ∂Β !== Nothing
@@ -239,15 +172,15 @@ Bernoulli_logit_constant(y, X, β, α, ::Any) = zero(eltype(β))
         q = quote
             # $(Expr(:meta, :inline))
             $init_q
-            @vvectorize $T for i ∈ eachindex(y)
+            @avx for i ∈ eachindex(y)
                 # a = $(Expr(:call, :+, :α, [:(X[i,$n] * β[$n]) for n ∈ 1:N_β]...))
-                a = vmuladd(X[i,1], β[1], α)
-                $([:(a = vmuladd(X[i,$n], β[$n], a)) for n ∈ 2:N_β]...)
+                a = vfmadd(X[i,1], β[1], α)
+                $([:(a = vfmadd(X[i,$n], β[$n], a)) for n ∈ 2:N_β]...)
                 OmP = one($T) / (one($T) + SLEEFPirates.exp( a ))
                 P = one($T) - OmP
-                logOmP = SLEEFPirates.log(OmP)
+                logOmP = log(OmP)
                 logP = a + logOmP
-                target = vadd(target, y[i] ? logP : logOmP)
+                target +=  y[i] ? logP : logOmP
                 $(partial_exprs...)
             end
             $out_expr
@@ -261,12 +194,31 @@ Bernoulli_logit_constant(y, X, β, α, ::Any) = zero(eltype(β))
             Eg, a padded vector from PaddedMatrices.jl or SVector from StaticArrays.jl.
         """)
     end
-    simplify_expr(q)
+    q
 end
 
-push!(DISTRIBUTION_DIFF_RULES, :Bernoulli_logit)
+struct LKJ{T} <: AbstractProbabilityDistribution{T} end
 
-@generated function LKJ(::Val{track}, L::AbstractCorrCholesky{N,T}, η::T) where {N,T,track}
+function logdensity(::LKJ{(true,false)}, L::AbstractCorrCholesky{N,T}, η::T) where {N,T}
+    t = target()
+    logd = logdiag(L)
+    off = (N - 2) + 2η
+    @avx for n ∈ eachindex(logd)
+        t += (off - n) * logd[n]
+    end
+    extract_data(t)
+end
+function logdensity(::LKJ{(true,false)}, L::AbstractCorrCholesky{N,T}, η::T) where {N,T}
+    t = target()
+    logd = logdiag(L)
+    off = (N - 2) + 2η
+    @avx for n ∈ eachindex(logd)
+        t += (off - n) * logd[n]
+    end
+    extract_data(t)
+end
+
+@generated function logdensity(::LKJ{track}, L::AbstractCorrCholesky{N,T}, η::T) where {N,T,track}
     W = VectorizationBase.pick_vector_width(N-1,T)
     # If the remainder is 1, we'll skip the first element (which equals 1, so the log is 0)
     # otherwise, we wont skip, because memory should be aligned with accessing the first element.
@@ -280,7 +232,7 @@ push!(DISTRIBUTION_DIFF_RULES, :Bernoulli_logit)
             # $(Expr(:meta, :inline))
             target = vbroadcast(SVec{$W,$T}, zero($T))
             logd = logdiag(L)
-            @vvectorize $T for n ∈ 1:$(rem1 ? N-1 : N)
+            @avx for n ∈ 1:$(rem1 ? N-1 : N)
                 target = vfmadd( ($(N - 2 - rem1) - n + 2η), logd[$(rem1 ? :(n+1) : :n)], target)
             end
             vtarget = extract_data(target)
@@ -316,7 +268,7 @@ push!(DISTRIBUTION_DIFF_RULES, :Bernoulli_logit)
             push!(q.args, ηtarget)
         end
     end
-    simplify_expr(q)
+    q
 end
 @generated function LKJ_constant(L::AbstractCorrCholesky{N,T}, η::T, ::Val{track}) where {N,T,track}
     :(LKJ(L,η,Val{$((!track[1],!track[2]))}()) - $(0.5*log(π)*StructuredMatrices.binomial2(N)))

@@ -16,6 +16,8 @@ using VectorizationBase: pick_vector_width, pick_vector_width_shift
 using ReverseDiffExpressionsBase: isinitialized, uninitialized
 using MacroTools: postwalk
 
+abstract type AbstractProbabilityDistribution{track} end
+
 function return_expression(return_expr)
     length(return_expr.args) == 1 ? return_expr.args[1] : return_expr
 end
@@ -30,17 +32,7 @@ include("normal/univariate_normal.jl")
 include("normal/multivariate_normal.jl")
 # include("normal/matrix_normal.jl")
 
-const STACK_POINTER_SUPPORTED_METHODS = Set{Symbol}()
-@def_stackpointer_fallback ∂lsgg ∂Gamma ∂LKJ ∂Normal ∂Beta ∂Bernoulli_logit ∂Binomial_logit #∂EₘₐₓNMA
-@def_stackpointer_noalloc Normal ∂Normal!
-include("precompile.jl")
 _precompile_()
-
-function __init__()
-    @add_stackpointer_method ∂lsgg ∂Gamma ∂LKJ ∂Normal ∂Beta ∂Bernoulli_logit ∂Binomial_logit ∂EₘₐₓNMA
-    @add_stackpointer_noalloc Normal ∂Normal!
-    _precompile_()
-end
 
 
 
