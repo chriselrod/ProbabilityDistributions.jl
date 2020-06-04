@@ -117,7 +117,7 @@ Bernoulli_logit_constant(y, X, β, α, ::Any) = zero(eltype(β))
     β_is_param = ∂Β !== Nothing
     α_is_param = ∂Α !== Nothing
     if PaddedMatrices.is_sized(β)
-        N_β = PaddedMatrices.type_length(β)
+        N_β = PaddedMatrices.number_elements(β)
         init_q = quote
             # T = promote_type(eltype(α),eltype(β),eltype(X))
 #            target = zero($T)
