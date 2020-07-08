@@ -21,7 +21,7 @@ constant(::BernoulliLogit, y::BitVector, α::AbstractVector{T}) where {T} = zero
 
 
 
-function ∂logdensity!(::Nothing, ∂α::AbstractVector, ::BernoulliLogit{(false,true)}, y::BitVector, α::AbstractVector{T}) where {T}
+function ∂logdensity!((_,∂α)::Tuple{Nothing,<:AbstractVector}, ::BernoulliLogit{(false,true)}, y::BitVector, α::AbstractVector{T}) where {T}
     t = target()
     @avx for i ∈ eachindex(α)
         αᵢ = α[i]
@@ -32,7 +32,7 @@ function ∂logdensity!(::Nothing, ∂α::AbstractVector, ::BernoulliLogit{(fals
         t -= y[i] ? nlogP : nlogOmP
         ∂α[i] += y[i] ? ∂logP : ∂logP - one(T)
     end
-    extract_data(t)
+    extract_data(t), (nothing, initialized(∂α))
 end
 
 struct BinomialLogit{T} <: AbstractProbabilityDistribution{T} end

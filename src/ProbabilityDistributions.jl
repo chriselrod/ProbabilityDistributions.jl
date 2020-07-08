@@ -17,6 +17,7 @@ using ReverseDiffExpressionsBase: isinitialized, uninitialized
 using MacroTools: postwalk
 
 abstract type AbstractProbabilityDistribution{track} end
+struct Updated∇ end
 
 function return_expression(return_expr)
     length(return_expr.args) == 1 ? return_expr.args[1] : return_expr
@@ -32,7 +33,7 @@ include("normal/univariate_normal.jl")
 include("normal/multivariate_normal.jl")
 # include("normal/matrix_normal.jl")
 
-_precompile_()
+# _precompile_()
 
 
 
