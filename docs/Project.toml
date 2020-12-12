@@ -1,2 +1,3 @@
 [deps]
 Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
+ProbabilityDistributions = "3e413219-3d65-5be9-8809-9d8824e993e6"
