@@ -9,7 +9,6 @@ makedocs(;
     repo="https://github.com/chriselrod/ProbabilityDistributions.jl/blob/{commit}{path}#L{line}",
     sitename="ProbabilityDistributions.jl",
     authors="Chris Elrod",
-    assets=[],
 )
 
 deploydocs(;
